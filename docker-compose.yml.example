@@ -1,0 +1,19 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram_scheduler_bot
+    restart: always
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=INFO
+    volumes:
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
