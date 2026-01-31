@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator
@@ -26,10 +27,24 @@ def get_database_path() -> Path:
 async def get_db() -> AsyncIterator[aiosqlite.Connection]:
     """Yield a DB connection with foreign keys enabled."""
     db_path = get_database_path()
-    async with aiosqlite.connect(db_path) as db:
-        await db.execute("PRAGMA foreign_keys = ON;")
-        db.row_factory = aiosqlite.Row
-        yield db
+    try:
+        async with aiosqlite.connect(db_path) as db:
+            await db.execute("PRAGMA foreign_keys = ON;")
+            db.row_factory = aiosqlite.Row
+            yield db
+    except sqlite3.OperationalError as e:
+        if "unable to open database file" in str(e).lower():
+            raise RuntimeError(
+                "Unable to open the SQLite database file.\n\n"
+                f"DATABASE_PATH resolves to: {db_path}\n\n"
+                "If you are running via Docker with a bind mount like ./data:/app/data, "
+                "the most common cause is permissions on the host ./data directory.\n\n"
+                "Fix (example):\n"
+                "- mkdir -p data\n"
+                "- sudo chown -R 1000:1000 data\n"
+                "- chmod 755 data\n"
+            ) from e
+        raise
 
 
 @asynccontextmanager

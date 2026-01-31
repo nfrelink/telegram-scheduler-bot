@@ -46,12 +46,20 @@ Note: all schedule times you enter are interpreted as UTC (not your local timezo
    # You can now edit the copied files locally.
    ```
 
-4. **Start the bot**
+4. **Create the data directory (for SQLite)**
+   ```bash
+   mkdir -p data
+   # The container runs as UID 1000; make sure it can write the database file:
+   sudo chown -R 1000:1000 data
+   chmod 755 data
+   ```
+
+5. **Start the bot**
    ```bash
    docker compose up -d --build
    ```
 
-5. **View logs**
+6. **View logs**
    ```bash
    docker compose logs -f
    ```
