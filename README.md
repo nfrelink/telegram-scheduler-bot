@@ -28,7 +28,7 @@ Note: all schedule times you enter are interpreted as UTC (not your local timezo
 
 1. **Clone the repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/nfrelink/telegram-scheduler-bot
    cd telegram-scheduler-bot
    ```
 
