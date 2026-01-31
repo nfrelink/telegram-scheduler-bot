@@ -5,6 +5,7 @@ import json
 
 import pytest
 from telegram import MessageEntity
+from telegram.constants import ChatType
 
 from database import queries as db
 from handlers import bulk_upload
@@ -34,6 +35,12 @@ class _FakeMessage:
 
     async def reply_text(self, text: str, **_kwargs) -> None:  # type: ignore[no-untyped-def]
         self.replies.append(text)
+
+
+@dataclass
+class _FakeChat:
+    id: int
+    type: str
 
 
 @dataclass
@@ -102,22 +109,111 @@ def test_message_to_collected_item_caption_modes() -> None:
     msg.photo = [_FakePhoto("photo_file_id")]
 
     item_preserve = bulk_upload._message_to_collected_item(
-        msg, caption_mode="preserve", single_caption=None, single_caption_entities=None
+        msg, caption_mode="preserve", single_caption=None, single_caption_entities=None, forward_origin_allowlist=set()
     )  # type: ignore[attr-defined]
     assert item_preserve is not None
     assert item_preserve.caption == "hello"
 
     item_remove = bulk_upload._message_to_collected_item(
-        msg, caption_mode="remove", single_caption=None, single_caption_entities=None
+        msg, caption_mode="remove", single_caption=None, single_caption_entities=None, forward_origin_allowlist=set()
     )  # type: ignore[attr-defined]
     assert item_remove is not None
     assert item_remove.caption is None
 
     item_single = bulk_upload._message_to_collected_item(
-        msg, caption_mode="single", single_caption="SINGLE", single_caption_entities=None
+        msg, caption_mode="single", single_caption="SINGLE", single_caption_entities=None, forward_origin_allowlist=set()
     )  # type: ignore[attr-defined]
     assert item_single is not None
     assert item_single.caption == "SINGLE"
+
+
+@pytest.mark.asyncio
+async def test_bulk_collect_media_records_forward_metadata_for_allowlisted_origin(initialized_db) -> None:
+    user = _FakeUser(id=111)
+    await db.upsert_user(user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name, is_admin=False)
+    await db.add_forward_origin_allowlist(user_id=user.id, origin_chat_id=-1001234567890)
+    context = _FakeContext()
+    context.user_data["bulk_caption_mode"] = "preserve"
+
+    msg = _FakeMessage()
+    msg.photo = [_FakePhoto("p1")]
+    msg.caption = "cap"
+    msg.chat = _FakeChat(id=user.id, type=ChatType.PRIVATE)
+    msg.message_id = 42
+    msg.forward_from_chat = _FakeChat(id=-1001234567890, type=ChatType.CHANNEL)
+    msg.forward_from_message_id = 207
+
+    update = _FakeUpdate(message=msg, effective_user=user)
+    st = await bulk_upload.bulk_collect_media(update, context)  # type: ignore[arg-type]
+    assert st == bulk_upload.COLLECTING_MEDIA
+
+    posts = context.user_data.get("bulk_posts")
+    assert isinstance(posts, list)
+    assert len(posts) == 1
+    assert posts[0]["file_id"] == "p1"
+    assert posts[0]["forward_from_chat_id"] == user.id
+    assert posts[0]["forward_from_message_id"] == 42
+    assert posts[0]["forward_origin_chat_id"] == -1001234567890
+    assert posts[0]["forward_origin_message_id"] == 207
+
+
+@pytest.mark.asyncio
+async def test_media_group_records_forward_metadata_per_item_for_allowlisted_origin(
+    initialized_db
+) -> None:
+    user = _FakeUser(id=2222)
+    await db.upsert_user(user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name, is_admin=False)
+    await db.add_forward_origin_allowlist(user_id=user.id, origin_chat_id=-1001234567890)
+    context = _FakeContext()
+    context.user_data["bulk_schedule_id"] = 1
+    context.user_data["bulk_caption_mode"] = "preserve"
+
+    m1 = _FakeMessage()
+    m1.photo = [_FakePhoto("p1")]
+    m1.media_group_id = "gid"
+    m1.chat = _FakeChat(id=user.id, type=ChatType.PRIVATE)
+    m1.message_id = 42
+    m1.forward_from_chat = _FakeChat(id=-1001234567890, type=ChatType.CHANNEL)
+    m1.forward_from_message_id = 189
+
+    u1 = _FakeUpdate(message=m1, effective_user=user)
+    st1 = await bulk_upload.bulk_collect_media(u1, context)  # type: ignore[arg-type]
+    assert st1 == bulk_upload.COLLECTING_MEDIA
+
+    m2 = _FakeMessage()
+    m2.photo = [_FakePhoto("p2")]
+    m2.media_group_id = "gid"
+    m2.chat = _FakeChat(id=user.id, type=ChatType.PRIVATE)
+    m2.message_id = 43
+    m2.forward_from_chat = _FakeChat(id=-1001234567890, type=ChatType.CHANNEL)
+    m2.forward_from_message_id = 190
+
+    u2 = _FakeUpdate(message=m2, effective_user=user)
+    st2 = await bulk_upload.bulk_collect_media(u2, context)  # type: ignore[arg-type]
+    assert st2 == bulk_upload.COLLECTING_MEDIA
+
+    done_msg = _FakeMessage(text="/done")
+    done_update = _FakeUpdate(message=done_msg, effective_user=user)
+    st_done = await bulk_upload.bulk_done(done_update, context)  # type: ignore[arg-type]
+    assert st_done == bulk_upload.CONFIRMING
+
+    posts = context.user_data.get("bulk_posts")
+    assert isinstance(posts, list)
+    assert len(posts) == 1
+    assert posts[0]["media_type"] == "media_group"
+    data = json.loads(posts[0]["media_group_data"])
+    assert isinstance(data, list)
+    assert len(data) == 2
+
+    assert data[0]["forward_from_chat_id"] == user.id
+    assert data[0]["forward_from_message_id"] == 42
+    assert data[0]["forward_origin_chat_id"] == -1001234567890
+    assert data[0]["forward_origin_message_id"] == 189
+
+    assert data[1]["forward_from_chat_id"] == user.id
+    assert data[1]["forward_from_message_id"] == 43
+    assert data[1]["forward_origin_chat_id"] == -1001234567890
+    assert data[1]["forward_origin_message_id"] == 190
 
 
 @pytest.mark.asyncio

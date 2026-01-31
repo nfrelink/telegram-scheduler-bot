@@ -32,6 +32,7 @@ async def _verify() -> None:
         "verification_codes",
         "delivery_stats_daily",
         "user_context",
+        "forward_origin_allowlist",
     }
 
     async with get_db() as db:

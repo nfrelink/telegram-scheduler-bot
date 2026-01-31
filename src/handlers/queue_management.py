@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -28,6 +29,21 @@ def _parse_int(text: str) -> int | None:
 
 def _format_dt(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _media_group_is_forwarded(media_group_data: object) -> bool:
+    if not isinstance(media_group_data, str) or not media_group_data.strip():
+        return False
+    try:
+        items = json.loads(media_group_data)
+    except Exception:
+        return False
+    if not isinstance(items, list) or not items:
+        return False
+    first = items[0]
+    if not isinstance(first, dict):
+        return False
+    return first.get("forward_from_chat_id") is not None and first.get("forward_from_message_id") is not None
 
 
 async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -111,6 +127,10 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             extra.append(f"caption='{caption}'")
         if retry_count:
             extra.append(f"retries={retry_count}")
+        if p.get("forward_from_chat_id") is not None and p.get("forward_from_message_id") is not None:
+            extra.append("forwarded")
+        if media_type == "media_group" and _media_group_is_forwarded(p.get("media_group_data")):
+            extra.append("forwarded")
 
         extra_text = f" ({', '.join(extra)})" if extra else ""
 

@@ -11,6 +11,7 @@ from handlers.admin import broadcast_command, debug_command, stats_command
 from handlers.channel_info import channelid_command
 from handlers.channel_management import list_channels_command, remove_channel_command
 from handlers.bulk_upload import bulk_upload_conversation_handler
+from handlers.forwarding import addforward_command, clearforward_command, forwarding_command, removeforward_command
 from handlers.queue_management import delete_post_command, test_schedule_command, view_queue_command
 from handlers.schedule_management import (
     copy_schedule_command,
@@ -60,6 +61,12 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("selectchannel", selectchannel_command))
     application.add_handler(CommandHandler("selectschedule", selectschedule_command))
     application.add_handler(CommandHandler("clearselection", clearselection_command))
+
+    # Forwarding configuration (per user)
+    application.add_handler(CommandHandler("forwarding", forwarding_command))
+    application.add_handler(CommandHandler("addforward", addforward_command))
+    application.add_handler(CommandHandler("removeforward", removeforward_command))
+    application.add_handler(CommandHandler("clearforward", clearforward_command))
 
     # Bulk upload (Phase 4)
     application.add_handler(bulk_upload_conversation_handler)

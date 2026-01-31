@@ -64,6 +64,10 @@ CREATE TABLE IF NOT EXISTS queued_posts (
     caption TEXT,
     caption_parse_mode TEXT,  -- NULL (plain), 'markdownv2', or 'html'
     caption_entities TEXT,  -- JSON list of Telegram MessageEntity dicts
+    forward_from_chat_id INTEGER,  -- Where to forward FROM (usually the user's chat with the bot)
+    forward_from_message_id INTEGER,  -- Message id in forward_from_chat_id
+    forward_origin_chat_id INTEGER,  -- Original source chat id (e.g., the channel that was forwarded from)
+    forward_origin_message_id INTEGER,  -- Original source message id (e.g., channel post id)
     media_group_data TEXT,  -- JSON array for media groups
     position INTEGER NOT NULL,  -- Queue position (FIFO)
     retry_count INTEGER DEFAULT 0,
@@ -103,6 +107,19 @@ CREATE TABLE IF NOT EXISTS user_context (
     FOREIGN KEY (selected_schedule_id) REFERENCES schedules(id) ON DELETE SET NULL
 );
 
+-- Per-user forwarding allowlist (origin channel IDs)
+-- If a user forwards a message to the bot from an allowlisted origin channel, the bot can
+-- forward that message into the destination channel to preserve "Forwarded from ..." attribution.
+CREATE TABLE IF NOT EXISTS forward_origin_allowlist (
+    user_id INTEGER NOT NULL,
+    origin_chat_id INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, origin_chat_id),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_forward_origin_allowlist_user_id ON forward_origin_allowlist(user_id);
+
 -- Aggregated daily delivery stats (small table; one row per day)
 CREATE TABLE IF NOT EXISTS delivery_stats_daily (
     day TEXT PRIMARY KEY,  -- 'YYYY-MM-DD' in UTC
@@ -127,6 +144,10 @@ async def _apply_migrations(db) -> None:  # type: ignore[no-untyped-def]
     """Apply lightweight, additive schema migrations."""
     await _ensure_column(db, table="queued_posts", column="caption_parse_mode", sql_type="TEXT")
     await _ensure_column(db, table="queued_posts", column="caption_entities", sql_type="TEXT")
+    await _ensure_column(db, table="queued_posts", column="forward_from_chat_id", sql_type="INTEGER")
+    await _ensure_column(db, table="queued_posts", column="forward_from_message_id", sql_type="INTEGER")
+    await _ensure_column(db, table="queued_posts", column="forward_origin_chat_id", sql_type="INTEGER")
+    await _ensure_column(db, table="queued_posts", column="forward_origin_message_id", sql_type="INTEGER")
     await db.commit()
 
 

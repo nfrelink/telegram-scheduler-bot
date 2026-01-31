@@ -33,6 +33,14 @@ def _help_text() -> str:
         "- /selection — Show current selection\n"
         "- /clearselection — Clear selection\n"
         "\n"
+        "Forwarding (optional):\n"
+        "- /forwarding — Show forwarding allowlist (origin channels)\n"
+        "- /addforward <origin_channel_id> — Add origin channel to allowlist\n"
+        "- /removeforward <origin_channel_id> — Remove origin channel from allowlist\n"
+        "- /clearforward — Clear forwarding allowlist\n"
+        "\n"
+        "Note: forwarding only applies in /bulk when caption mode is 'preserve'.\n"
+        "\n"
         "Tip: when a channel/schedule is selected, many commands work without an explicit id.\n"
         "\n"
         "Schedules:\n"
@@ -78,6 +86,12 @@ def _onboarding_segments() -> list[Segment]:
         Segment("/newschedule", code=True),
         Segment(" and queue posts with "),
         Segment("/bulk", code=True),
+        Segment("\n\nOptional: configure forwarding allowlist with "),
+        Segment("/forwarding", code=True),
+        Segment(" to preserve 'Forwarded from ...' attribution for selected source channels.\n"),
+        Segment("Forwarding is only applied during /bulk when caption mode is "),
+        Segment("preserve", code=True),
+        Segment("."),
         Segment("\n"),
     ]
 

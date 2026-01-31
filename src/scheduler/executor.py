@@ -30,6 +30,27 @@ async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, An
     - document
     - media_group
     """
+    forward_from_chat_id = post.get("forward_from_chat_id")
+    forward_from_message_id = post.get("forward_from_message_id")
+
+    if forward_from_chat_id is not None and forward_from_message_id is not None:
+        try:
+            await bot.forward_message(
+                chat_id=telegram_channel_id,
+                from_chat_id=int(forward_from_chat_id),
+                message_id=int(forward_from_message_id),
+            )
+            return True
+        except Exception as e:
+            logger.error(
+                "Failed to forward post id=%s to channel=%s: %s",
+                post.get("id"),
+                telegram_channel_id,
+                e,
+                exc_info=True,
+            )
+            return False
+
     media_type = post.get("media_type")
     caption = post.get("caption")
     caption_parse_mode = post.get("caption_parse_mode")
@@ -163,6 +184,19 @@ async def _send_post_once(
             media_group_data = post.get("media_group_data")
             if not media_group_data:
                 raise ValueError("media_group_data missing")
+
+            forward_refs = _parse_media_group_forward_refs(media_group_data)
+            if forward_refs is not None:
+                from_chat_id, message_ids = forward_refs
+                # Use forward_messages so Telegram can preserve grouping/attribution as much as possible.
+                result = await bot.forward_messages(
+                    chat_id=telegram_channel_id,
+                    from_chat_id=from_chat_id,
+                    message_ids=message_ids,
+                )
+                if len(result) != len(message_ids):
+                    raise RuntimeError("forward_messages returned fewer results than requested")
+                return True
 
             with ExitStack() as stack:
                 media = _parse_media_group(media_group_data, stack=stack)
@@ -303,6 +337,45 @@ def _parse_media_group(
                 raise ValueError(f"Unsupported media_type in media group: {media_type}")
 
     return media
+
+
+def _parse_media_group_forward_refs(media_group_data: str) -> tuple[int, list[int]] | None:
+    """Parse media_group_data for forwarding metadata.
+
+    Returns (from_chat_id, message_ids) if every item has:
+    - forward_from_chat_id
+    - forward_from_message_id
+
+    Otherwise returns None (meaning: send as a copied media group).
+    """
+    try:
+        items = json.loads(media_group_data)
+    except Exception:
+        return None
+
+    if not isinstance(items, list) or not items:
+        return None
+
+    pairs: list[tuple[int, int]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            return None
+        from_chat_id = item.get("forward_from_chat_id")
+        message_id = item.get("forward_from_message_id")
+        if from_chat_id is None or message_id is None:
+            return None
+        try:
+            pairs.append((int(from_chat_id), int(message_id)))
+        except (TypeError, ValueError):
+            return None
+
+    base_from = pairs[0][0]
+    if any(fc != base_from for (fc, _mid) in pairs):
+        return None
+
+    # Stable order for forwarding: ascending by message_id in the source chat.
+    message_ids = [mid for (_fc, mid) in sorted(pairs, key=lambda p: p[1])]
+    return base_from, message_ids
 
 
 def _to_parse_mode(value: str | None) -> str | None:

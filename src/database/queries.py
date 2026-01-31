@@ -168,6 +168,53 @@ async def clear_user_context(user_id: int) -> None:
     await set_user_context(user_id=user_id, selected_channel_id=None, selected_schedule_id=None)
 
 
+# --- Forwarding allowlist ----------------------------------------------------
+
+
+async def get_forward_origin_allowlist(user_id: int) -> list[int]:
+    """Get origin chat IDs (channels) that should be forwarded for this user."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT origin_chat_id
+            FROM forward_origin_allowlist
+            WHERE user_id = ?
+            ORDER BY origin_chat_id ASC
+            """,
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return [int(r[0]) for r in rows]  # type: ignore[index]
+
+
+async def add_forward_origin_allowlist(*, user_id: int, origin_chat_id: int) -> None:
+    """Add an origin chat ID to a user's forwarding allowlist."""
+    async with transaction() as db:
+        await db.execute(
+            """
+            INSERT INTO forward_origin_allowlist (user_id, origin_chat_id)
+            VALUES (?, ?)
+            ON CONFLICT(user_id, origin_chat_id) DO NOTHING
+            """,
+            (user_id, origin_chat_id),
+        )
+
+
+async def remove_forward_origin_allowlist(*, user_id: int, origin_chat_id: int) -> None:
+    """Remove an origin chat ID from a user's forwarding allowlist."""
+    async with transaction() as db:
+        await db.execute(
+            "DELETE FROM forward_origin_allowlist WHERE user_id = ? AND origin_chat_id = ?",
+            (user_id, origin_chat_id),
+        )
+
+
+async def clear_forward_origin_allowlist(user_id: int) -> None:
+    """Clear forwarding allowlist for a user."""
+    async with transaction() as db:
+        await db.execute("DELETE FROM forward_origin_allowlist WHERE user_id = ?", (user_id,))
+
+
 # --- Channels ---------------------------------------------------------------
 
 
@@ -415,6 +462,10 @@ async def add_queued_post(
     caption: str | None = None,
     caption_parse_mode: str | None = None,
     caption_entities: str | None = None,
+    forward_from_chat_id: int | None = None,
+    forward_from_message_id: int | None = None,
+    forward_origin_chat_id: int | None = None,
+    forward_origin_message_id: int | None = None,
     media_group_data: str | None = None,
 ) -> None:
     """Add a post to the end of a schedule's FIFO queue."""
@@ -437,10 +488,14 @@ async def add_queued_post(
                     caption,
                     caption_parse_mode,
                     caption_entities,
+                    forward_from_chat_id,
+                    forward_from_message_id,
+                    forward_origin_chat_id,
+                    forward_origin_message_id,
                     media_group_data,
                     position
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 schedule_id,
@@ -450,6 +505,10 @@ async def add_queued_post(
                 caption,
                 caption_parse_mode,
                 caption_entities,
+                forward_from_chat_id,
+                forward_from_message_id,
+                forward_origin_chat_id,
+                forward_origin_message_id,
                 media_group_data,
                 next_position,
             ),
@@ -468,6 +527,10 @@ async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -
             - caption (optional)
             - caption_parse_mode (optional): NULL (plain), 'markdownv2', or 'html'
             - caption_entities (optional): JSON list of Telegram MessageEntity dicts
+            - forward_from_chat_id (optional): Telegram chat id to forward FROM
+            - forward_from_message_id (optional): Telegram message id in forward_from_chat_id
+            - forward_origin_chat_id (optional): Original source chat id (e.g., channel id)
+            - forward_origin_message_id (optional): Original source message id (e.g., channel post id)
             - media_group_data (optional)
 
     Returns:
@@ -494,6 +557,10 @@ async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -
                     post.get("caption"),
                     post.get("caption_parse_mode"),
                     post.get("caption_entities"),
+                    post.get("forward_from_chat_id"),
+                    post.get("forward_from_message_id"),
+                    post.get("forward_origin_chat_id"),
+                    post.get("forward_origin_message_id"),
                     post.get("media_group_data"),
                     start_position + i,
                 )
@@ -510,10 +577,14 @@ async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -
                     caption,
                     caption_parse_mode,
                     caption_entities,
+                    forward_from_chat_id,
+                    forward_from_message_id,
+                    forward_origin_chat_id,
+                    forward_origin_message_id,
                     media_group_data,
                     position
                 )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )

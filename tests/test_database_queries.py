@@ -53,6 +53,63 @@ async def test_add_queued_posts_bulk_appends_and_compacts_positions(initialized_
 
 
 @pytest.mark.asyncio
+async def test_add_queued_posts_bulk_persists_forward_metadata(initialized_db) -> None:
+    user_id = 777
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    channel = await db.create_channel(user_id=user_id, telegram_channel_id="-7777", channel_name="Forward")
+    schedule = await db.create_schedule(
+        channel_db_id=int(channel["id"]),
+        name="Forward Schedule",
+        pattern={"type": "interval", "minutes": 60},
+        timezone_name="UTC",
+        state="paused",
+    )
+    schedule_id = int(schedule["id"])
+
+    await db.add_queued_posts_bulk(
+        schedule_id,
+        [
+            {
+                "media_type": "photo",
+                "file_id": "a",
+                "caption": "c",
+                "forward_from_chat_id": 123,
+                "forward_from_message_id": 456,
+                "forward_origin_chat_id": -1001234567890,
+                "forward_origin_message_id": 207,
+            }
+        ],
+    )
+
+    posts = await db.get_queued_posts(schedule_id, limit=10)
+    assert len(posts) == 1
+    assert int(posts[0]["forward_from_chat_id"]) == 123
+    assert int(posts[0]["forward_from_message_id"]) == 456
+    assert int(posts[0]["forward_origin_chat_id"]) == -1001234567890
+    assert int(posts[0]["forward_origin_message_id"]) == 207
+
+
+@pytest.mark.asyncio
+async def test_forward_origin_allowlist_roundtrip(initialized_db) -> None:
+    user_id = 888
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+
+    assert await db.get_forward_origin_allowlist(user_id) == []
+
+    await db.add_forward_origin_allowlist(user_id=user_id, origin_chat_id=-1001)
+    await db.add_forward_origin_allowlist(user_id=user_id, origin_chat_id=-1002)
+    await db.add_forward_origin_allowlist(user_id=user_id, origin_chat_id=-1002)  # idempotent
+
+    assert await db.get_forward_origin_allowlist(user_id) == [-1002, -1001]
+
+    await db.remove_forward_origin_allowlist(user_id=user_id, origin_chat_id=-1001)
+    assert await db.get_forward_origin_allowlist(user_id) == [-1002]
+
+    await db.clear_forward_origin_allowlist(user_id)
+    assert await db.get_forward_origin_allowlist(user_id) == []
+
+
+@pytest.mark.asyncio
 async def test_scheduled_for_helpers_and_earliest(initialized_db) -> None:
     user_id = 456
     await db.upsert_user(user_id=user_id, username="u2", first_name="f2", last_name="l2", is_admin=False)

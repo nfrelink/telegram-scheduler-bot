@@ -36,6 +36,10 @@ class _CollectedItem:
     file_id: str
     caption: str | None
     caption_entities: list[dict[str, Any]] | None
+    forward_from_chat_id: int | None
+    forward_from_message_id: int | None
+    forward_origin_chat_id: int | None
+    forward_origin_message_id: int | None
 
 
 def _state_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -74,6 +78,34 @@ def _entities_to_dicts(entities: list[MessageEntity] | None) -> list[dict[str, A
 def _utf16_len(text: str) -> int:
     # Telegram entity offsets/lengths are in UTF-16 code units.
     return len(text.encode("utf-16-le")) // 2
+
+
+def _extract_forward_origin_channel(message: Message) -> tuple[int | None, int | None]:
+    """Return (origin_chat_id, origin_message_id) if message was forwarded from a channel."""
+    # Bot API legacy fields (still present in PTB for compatibility).
+    fwd_chat = getattr(message, "forward_from_chat", None)
+    fwd_msg_id = getattr(message, "forward_from_message_id", None)
+    if fwd_chat is not None and getattr(fwd_chat, "type", None) == ChatType.CHANNEL:
+        chat_id_raw = getattr(fwd_chat, "id", None)
+        if chat_id_raw is not None and fwd_msg_id is not None:
+            try:
+                return int(chat_id_raw), int(fwd_msg_id)
+            except (TypeError, ValueError):
+                return None, None
+
+    # Bot API v7+ origin object.
+    origin = getattr(message, "forward_origin", None)
+    origin_chat = getattr(origin, "chat", None) if origin is not None else None
+    origin_message_id = getattr(origin, "message_id", None) if origin is not None else None
+    if origin_chat is not None and origin_message_id is not None and getattr(origin_chat, "type", None) == ChatType.CHANNEL:
+        chat_id_raw = getattr(origin_chat, "id", None)
+        if chat_id_raw is not None:
+            try:
+                return int(chat_id_raw), int(origin_message_id)
+            except (TypeError, ValueError):
+                return None, None
+
+    return None, None
 
 
 def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
@@ -177,6 +209,7 @@ def _message_to_collected_item(
     caption_mode: str,
     single_caption: str | None,
     single_caption_entities: list[dict[str, Any]] | None,
+    forward_origin_allowlist: set[int] | None,
 ) -> _CollectedItem | None:
     caption: str | None
     caption_entities: list[dict[str, Any]] | None
@@ -192,15 +225,69 @@ def _message_to_collected_item(
         if caption is None and caption_entities:
             caption_entities = None
 
+    forward_from_chat_id: int | None = None
+    forward_from_message_id: int | None = None
+    forward_origin_chat_id: int | None = None
+    forward_origin_message_id: int | None = None
+
+    # Forwarding is only supported in preserve mode.
+    # For media groups, we record per-item forwarding metadata and later forward the whole album.
+    if caption_mode == "preserve":
+        allow = forward_origin_allowlist or set()
+        if allow:
+            origin_chat_id, origin_msg_id = _extract_forward_origin_channel(message)
+            if origin_chat_id is not None and origin_chat_id in allow:
+                chat = getattr(message, "chat", None)
+                msg_id = getattr(message, "message_id", None)
+                chat_id_raw = getattr(chat, "id", None) if chat is not None else None
+                if chat_id_raw is not None and msg_id is not None:
+                    try:
+                        forward_from_chat_id = int(chat_id_raw)
+                        forward_from_message_id = int(msg_id)
+                        forward_origin_chat_id = int(origin_chat_id)
+                        forward_origin_message_id = int(origin_msg_id) if origin_msg_id is not None else None
+                    except (TypeError, ValueError):
+                        forward_from_chat_id = None
+                        forward_from_message_id = None
+                        forward_origin_chat_id = None
+                        forward_origin_message_id = None
+
     if message.photo:
         file_id = message.photo[-1].file_id
-        return _CollectedItem(media_type="photo", file_id=file_id, caption=caption, caption_entities=caption_entities)
+        return _CollectedItem(
+            media_type="photo",
+            file_id=file_id,
+            caption=caption,
+            caption_entities=caption_entities,
+            forward_from_chat_id=forward_from_chat_id,
+            forward_from_message_id=forward_from_message_id,
+            forward_origin_chat_id=forward_origin_chat_id,
+            forward_origin_message_id=forward_origin_message_id,
+        )
 
     if message.video:
-        return _CollectedItem(media_type="video", file_id=message.video.file_id, caption=caption, caption_entities=caption_entities)
+        return _CollectedItem(
+            media_type="video",
+            file_id=message.video.file_id,
+            caption=caption,
+            caption_entities=caption_entities,
+            forward_from_chat_id=forward_from_chat_id,
+            forward_from_message_id=forward_from_message_id,
+            forward_origin_chat_id=forward_origin_chat_id,
+            forward_origin_message_id=forward_origin_message_id,
+        )
 
     if message.document:
-        return _CollectedItem(media_type="document", file_id=message.document.file_id, caption=caption, caption_entities=caption_entities)
+        return _CollectedItem(
+            media_type="document",
+            file_id=message.document.file_id,
+            caption=caption,
+            caption_entities=caption_entities,
+            forward_from_chat_id=forward_from_chat_id,
+            forward_from_message_id=forward_from_message_id,
+            forward_origin_chat_id=forward_origin_chat_id,
+            forward_origin_message_id=forward_origin_message_id,
+        )
 
     return None
 
@@ -215,6 +302,16 @@ def _finalize_media_group_items(
     """Convert collected items into media_group_data JSON."""
     if not items:
         raise ValueError("Empty media group")
+
+    # Best-effort stable ordering: if we have per-item message IDs (for forwarding),
+    # order by them so the album forwards in the same order as received.
+    items = sorted(
+        items,
+        key=lambda i: (
+            i.forward_from_message_id is None,
+            int(i.forward_from_message_id or 0),
+        ),
+    )
 
     # Determine group caption behavior
     group_caption: str | None
@@ -240,6 +337,10 @@ def _finalize_media_group_items(
                 "caption": group_caption if idx == 0 else None,
                 "caption_parse_mode": None,
                 "caption_entities": group_caption_entities if idx == 0 else None,
+                "forward_from_chat_id": item.forward_from_chat_id,
+                "forward_from_message_id": item.forward_from_message_id,
+                "forward_origin_chat_id": item.forward_origin_chat_id,
+                "forward_origin_message_id": item.forward_origin_message_id,
             }
         )
 
@@ -303,6 +404,10 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         Segment("- preserve (keep original captions)\n"),
         Segment("- remove (remove all captions)\n"),
         Segment("- single (use one caption for all posts; formatting is preserved)\n\n"),
+        Segment(
+            "Tip: configure /forwarding if you want to preserve 'Forwarded from ...' attribution for specific source channels.\n"
+            "Forwarding only applies when caption mode is 'preserve'.\n"
+        ),
         Segment("Tip: for 'single', you can format the caption message (links/code/etc) and the bot will keep it.\n"),
         Segment("Tip: you can also paste [text](url) links and `inline code` and it will be preserved.\n\n"),
         Segment("Or /cancel to stop."),
@@ -400,6 +505,7 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
         caption_mode=caption_mode,
         single_caption=single_caption,
         single_caption_entities=single_caption_entities,
+        forward_origin_allowlist=set(await db.get_forward_origin_allowlist(update.effective_user.id)),
     )
     if item is None:
         await update.message.reply_text("Unsupported message type. Send a photo, video, or document.")
@@ -442,6 +548,10 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "caption": item.caption,
             "caption_parse_mode": None,
             "caption_entities": json.dumps(item.caption_entities) if item.caption_entities else None,
+            "forward_from_chat_id": item.forward_from_chat_id,
+            "forward_from_message_id": item.forward_from_message_id,
+            "forward_origin_chat_id": item.forward_origin_chat_id,
+            "forward_origin_message_id": item.forward_origin_message_id,
             "media_group_data": None,
         }
     )
