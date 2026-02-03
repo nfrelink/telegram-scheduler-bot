@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -27,8 +28,14 @@ def _parse_int(text: str) -> int | None:
         return None
 
 
-def _format_dt(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+def _format_dt(dt: datetime, *, tz_name: str | None = None) -> str:
+    tz = timezone.utc
+    if tz_name:
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = timezone.utc
+    return dt.astimezone(tz).replace(microsecond=0).isoformat()
 
 
 def _media_group_is_forwarded(media_group_data: object) -> bool:
@@ -84,6 +91,7 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if schedule is None:
         await update.message.reply_text("Schedule not found or not owned by you.")
         return
+    tz_name = str(schedule.get("timezone") or "UTC")
 
     if not used_selected:
         await db.set_user_context(
@@ -107,7 +115,7 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     segments: list[Segment] = [
         Segment(f"Next {len(posts)} queued posts for schedule "),
         Segment(str(schedule_id), code=True),
-        Segment(" (times are UTC):\n"),
+        Segment(f" (times shown in {tz_name}):\n"),
     ]
     for p in posts:
         post_id = p.get("id")
@@ -140,7 +148,7 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             Segment(": "),
             Segment(str(media_type)),
             Segment(" at "),
-            Segment(_format_dt(planned_time)),
+            Segment(_format_dt(planned_time, tz_name=tz_name)),
             Segment(extra_text),
             Segment("\n"),
         ]
@@ -213,6 +221,7 @@ async def test_schedule_command(update: Update, context: ContextTypes.DEFAULT_TY
     if schedule is None:
         await update.message.reply_text("Schedule not found or not owned by you.")
         return
+    tz_name = str(schedule.get("timezone") or "UTC")
 
     if not used_selected:
         await db.set_user_context(
@@ -227,7 +236,7 @@ async def test_schedule_command(update: Update, context: ContextTypes.DEFAULT_TY
     segments: list[Segment] = [
         Segment(f"Next {run_count} runs for schedule "),
         Segment(str(schedule_id), code=True),
-        Segment(" (times are UTC):\n"),
+        Segment(f" (times shown in {tz_name}):\n"),
     ]
     for i in range(run_count):
         cursor_time = calculate_next_run(schedule, after=cursor_time)
@@ -236,7 +245,11 @@ async def test_schedule_command(update: Update, context: ContextTypes.DEFAULT_TY
         post = posts[0] if posts else None
 
         has_post = post is not None
-        segments += [Segment(f"- run {i + 1} at "), Segment(_format_dt(cursor_time)), Segment(": ")]
+        segments += [
+            Segment(f"- run {i + 1} at "),
+            Segment(_format_dt(cursor_time, tz_name=tz_name)),
+            Segment(": "),
+        ]
         if has_post:
             segments += [
                 Segment("post "),

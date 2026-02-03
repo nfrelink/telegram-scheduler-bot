@@ -53,6 +53,31 @@ async def upsert_user(
         return user
 
 
+async def get_user_timezone(user_id: int) -> str | None:
+    """Get the user's preferred timezone (IANA name), or None if unset."""
+    async with get_db() as db:
+        cursor = await db.execute("SELECT timezone FROM users WHERE id = ?", (user_id,))
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        # Row is a sqlite Row; index 0 corresponds to 'timezone'.
+        raw = row[0]  # type: ignore[index]
+        if raw is None:
+            return None
+        tz = str(raw).strip()
+        return tz or None
+
+
+async def set_user_timezone(user_id: int, timezone_name: str | None) -> None:
+    """Set the user's preferred timezone (IANA name). Use None to clear."""
+    value = timezone_name.strip() if isinstance(timezone_name, str) else None
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE users SET timezone = ? WHERE id = ?",
+            (value, user_id),
+        )
+
+
 async def get_all_users() -> list[dict[str, Any]]:
     """Get all users (for admin broadcast)."""
     async with get_db() as db:
@@ -432,6 +457,15 @@ async def update_schedule_name(schedule_id: int, *, name: str) -> None:
         await db.execute(
             "UPDATE schedules SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (name, schedule_id),
+        )
+
+
+async def update_schedule_timezone(schedule_id: int, *, timezone_name: str) -> None:
+    """Update schedule timezone (IANA name)."""
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE schedules SET timezone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (timezone_name, schedule_id),
         )
 
 

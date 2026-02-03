@@ -11,6 +11,7 @@ import logging
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from database import access as db_access
 from database import queries as db
 from handlers.common import ensure_user_record
 from handlers.verification import resolve_channel_id
@@ -103,8 +104,8 @@ async def selectchannel_command(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    channel = await db.get_channel_by_telegram_id(telegram_channel_id)
-    if channel is None or int(channel["user_id"]) != update.effective_user.id:
+    channel = await db_access.get_channel_by_telegram_id_for_user(update.effective_user.id, telegram_channel_id)
+    if channel is None:
         await update.message.reply_text("Channel not found or not owned by you.")
         return
 

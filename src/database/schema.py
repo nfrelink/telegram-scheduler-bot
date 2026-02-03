@@ -10,11 +10,18 @@ logger = logging.getLogger(__name__)
 
 
 SCHEMA_SQL = """
+-- Track applied schema migrations (additive, idempotent).
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    id TEXT PRIMARY KEY,
+    applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,  -- Telegram user ID
     username TEXT,
     first_name TEXT,
     last_name TEXT,
+    timezone TEXT,  -- IANA tz name (e.g., "America/New_York"); NULL => DEFAULT_TIMEZONE/UTC
     is_admin BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -141,14 +148,57 @@ async def init_database() -> None:
 
 
 async def _apply_migrations(db) -> None:  # type: ignore[no-untyped-def]
-    """Apply lightweight, additive schema migrations."""
-    await _ensure_column(db, table="queued_posts", column="caption_parse_mode", sql_type="TEXT")
-    await _ensure_column(db, table="queued_posts", column="caption_entities", sql_type="TEXT")
-    await _ensure_column(db, table="queued_posts", column="forward_from_chat_id", sql_type="INTEGER")
-    await _ensure_column(db, table="queued_posts", column="forward_from_message_id", sql_type="INTEGER")
-    await _ensure_column(db, table="queued_posts", column="forward_origin_chat_id", sql_type="INTEGER")
-    await _ensure_column(db, table="queued_posts", column="forward_origin_message_id", sql_type="INTEGER")
+    """Apply recorded, additive schema migrations."""
+    # Ensure migration table exists even if SCHEMA_SQL is bypassed.
+    await db.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            id TEXT PRIMARY KEY,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
     await db.commit()
+
+    migrations: list[tuple[str, list[tuple[str, str, str]]]] = [
+        (
+            "20250201_add_schedules_timezone",
+            [("schedules", "timezone", "TEXT DEFAULT 'UTC'")],
+        ),
+        (
+            "20260202_add_users_timezone",
+            [("users", "timezone", "TEXT")],
+        ),
+        (
+            "20260202_add_queued_posts_forward_and_caption_fields",
+            [
+                ("queued_posts", "caption_parse_mode", "TEXT"),
+                ("queued_posts", "caption_entities", "TEXT"),
+                ("queued_posts", "forward_from_chat_id", "INTEGER"),
+                ("queued_posts", "forward_from_message_id", "INTEGER"),
+                ("queued_posts", "forward_origin_chat_id", "INTEGER"),
+                ("queued_posts", "forward_origin_message_id", "INTEGER"),
+            ],
+        ),
+    ]
+
+    applied = await _get_applied_migrations(db)
+    for migration_id, columns in migrations:
+        if migration_id in applied:
+            continue
+        for table, column, sql_type in columns:
+            await _ensure_column(db, table=table, column=column, sql_type=sql_type)
+        await db.execute(
+            "INSERT INTO schema_migrations (id) VALUES (?)",
+            (migration_id,),
+        )
+        await db.commit()
+
+
+async def _get_applied_migrations(db) -> set[str]:  # type: ignore[no-untyped-def]
+    cursor = await db.execute("SELECT id FROM schema_migrations")
+    rows = await cursor.fetchall()
+    return {str(r[0]) for r in rows}  # type: ignore[index]
 
 
 async def _ensure_column(db, *, table: str, column: str, sql_type: str) -> None:  # type: ignore[no-untyped-def]

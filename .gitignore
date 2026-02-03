@@ -34,6 +34,8 @@ env/
 *.swp
 *.swo
 *~
+.cursor/
+AGENTS.md
 
 # Database / runtime data
 *.db

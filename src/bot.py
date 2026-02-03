@@ -21,6 +21,7 @@ from handlers.schedule_management import (
     new_schedule_conversation_handler,
     pause_schedule_command,
     resume_schedule_command,
+    setscheduletimezone_command,
 )
 from handlers.selection import (
     clearselection_command,
@@ -28,14 +29,40 @@ from handlers.selection import (
     selectschedule_command,
     selection_command,
 )
+from handlers.timezone_management import gettimezone_command, settimezone_command
 from handlers.user_commands import help_command, start_command
 from handlers.verification import add_channel_command, channel_post_handler
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_update_meta(update: object) -> dict[str, object]:
+    """Extract minimal, non-content metadata for logging."""
+    meta: dict[str, object] = {"type": type(update).__name__}
+    try:
+        meta["update_id"] = getattr(update, "update_id", None)
+        effective_user = getattr(update, "effective_user", None)
+        effective_chat = getattr(update, "effective_chat", None)
+        effective_message = getattr(update, "effective_message", None)
+        meta["user_id"] = getattr(effective_user, "id", None) if effective_user is not None else None
+        meta["chat_id"] = getattr(effective_chat, "id", None) if effective_chat is not None else None
+        meta["message_id"] = (
+            getattr(effective_message, "message_id", None) if effective_message is not None else None
+        )
+    except Exception:
+        # Best-effort only; never raise from error handler logging.
+        return meta
+    return meta
+
+
 async def error_handler(update: object, context) -> None:  # type: ignore[no-untyped-def]
     """Global error handler."""
-    logger.error("Unhandled exception while processing update=%r", update, exc_info=context.error)
+    meta = _safe_update_meta(update)
+    logger.error(
+        "Unhandled exception while processing update (meta=%s)",
+        meta,
+        exc_info=context.error,
+    )
 
 
 def create_application() -> Application:
@@ -49,6 +76,8 @@ def create_application() -> Application:
     # Core user commands
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("gettimezone", gettimezone_command))
+    application.add_handler(CommandHandler("settimezone", settimezone_command))
 
     # Channel verification and management
     application.add_handler(CommandHandler("addchannel", add_channel_command))
@@ -79,6 +108,7 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("resumeschedule", resume_schedule_command))
     application.add_handler(CommandHandler("deleteschedule", delete_schedule_command))
     application.add_handler(CommandHandler("copyschedule", copy_schedule_command))
+    application.add_handler(CommandHandler("setscheduletimezone", setscheduletimezone_command))
 
     # Queue management (Phase 3)
     application.add_handler(CommandHandler("viewqueue", view_queue_command))

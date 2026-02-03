@@ -63,6 +63,29 @@ def test_calculate_next_run_weekly() -> None:
     assert calculate_next_run(schedule, after=after2) == datetime(2024, 1, 3, 12, 0, tzinfo=timezone.utc)
 
 
+def test_calculate_next_run_daily_timezone_dst_shift_europe_amsterdam() -> None:
+    """Daily schedules should stay anchored to local time across DST."""
+    schedule = {"pattern": {"type": "daily", "times": ["09:00"]}, "timezone": "Europe/Amsterdam"}
+
+    # Before EU DST starts (CET, UTC+1): 09:00 local == 08:00 UTC.
+    after_winter = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    assert calculate_next_run(schedule, after=after_winter) == datetime(2026, 3, 29, 7, 0, tzinfo=timezone.utc)
+
+    # Before EU DST ends (CEST, UTC+2): next day may be CET again.
+    after_summer = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+    assert calculate_next_run(schedule, after=after_summer) == datetime(2026, 10, 25, 8, 0, tzinfo=timezone.utc)
+
+
+def test_calculate_next_run_daily_dst_gap_is_handled_europe_amsterdam() -> None:
+    """Nonexistent local times (spring-forward gap) should schedule to the next valid instant."""
+    schedule = {"pattern": {"type": "daily", "times": ["02:30"]}, "timezone": "Europe/Amsterdam"}
+
+    # EU DST start day 2026-03-29: local time jumps 02:00 -> 03:00, so 02:30 doesn't exist.
+    # The implementation returns a UTC instant that corresponds to ~03:30 local time.
+    after = datetime(2026, 3, 29, 0, 0, tzinfo=timezone.utc)
+    assert calculate_next_run(schedule, after=after) == datetime(2026, 3, 29, 1, 30, tzinfo=timezone.utc)
+
+
 def test_validate_custom_is_rejected() -> None:
     ok, _ = validate_schedule_pattern({"type": "custom", "cron": "0 */2 * * *"})
     assert ok is False

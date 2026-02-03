@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime, timedelta, timezone, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -24,15 +24,25 @@ WEEKDAY_NAME_TO_INT: dict[str, int] = {
 }
 
 
-def _get_timezone(tz_name: str | None) -> ZoneInfo:
+def _get_timezone(tz_name: str | None) -> tzinfo:
     if not tz_name:
         tz_name = os.getenv("DEFAULT_TIMEZONE", "UTC")
 
+    # Always support UTC even if system tzdata is missing.
+    if str(tz_name).upper() in {"UTC", "ETC/UTC"}:
+        return timezone.utc
+
     try:
         return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        logger.warning(
+            "Timezone %r not found (missing tzdata?); falling back to UTC",
+            tz_name,
+        )
+        return timezone.utc
     except Exception:
         logger.warning("Unknown timezone %r; falling back to UTC", tz_name)
-        return ZoneInfo("UTC")
+        return timezone.utc
 
 
 def _ensure_aware_utc(dt: datetime) -> datetime:
@@ -137,7 +147,7 @@ def calculate_next_run(
             raise ValueError("Unknown schedule type.")
 
 
-def _next_daily_occurrence(after_utc: datetime, times: list[str], tz: ZoneInfo) -> datetime:
+def _next_daily_occurrence(after_utc: datetime, times: list[str], tz: tzinfo) -> datetime:
     after_local = after_utc.astimezone(tz)
     parsed_times = sorted({parse_time_string(t) for t in times if parse_time_string(t)})
     if not parsed_times:
@@ -160,7 +170,7 @@ def _next_weekly_occurrence(
     after_utc: datetime,
     days: list[str],
     times: list[str],
-    tz: ZoneInfo,
+    tz: tzinfo,
 ) -> datetime:
     after_local = after_utc.astimezone(tz)
     day_set = {WEEKDAY_NAME_TO_INT[d.lower()] for d in days}

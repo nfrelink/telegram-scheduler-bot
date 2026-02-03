@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import Update
 from telegram.ext import (
@@ -14,6 +15,7 @@ from telegram.ext import (
     filters,
 )
 
+from database import access as db_access
 from database import queries as db
 from handlers.common import ensure_user_record
 from handlers.selection import selection_segments
@@ -47,6 +49,23 @@ logger = logging.getLogger(__name__)
 
 def _default_timezone_name() -> str:
     return os.getenv("DEFAULT_TIMEZONE", "UTC") or "UTC"
+
+
+async def _effective_user_timezone_name(user_id: int) -> str:
+    tz = await db.get_user_timezone(user_id)
+    return tz or _default_timezone_name()
+
+
+def _is_valid_timezone_name(tz_name: str) -> bool:
+    if tz_name.upper() in {"UTC", "ETC/UTC"}:
+        return True
+    try:
+        ZoneInfo(tz_name)
+        return True
+    except ZoneInfoNotFoundError:
+        return False
+    except Exception:
+        return False
 
 
 def _parse_schedule_id(text: str) -> int | None:
@@ -117,19 +136,20 @@ def _parse_weekdays_csv(text: str) -> list[str] | None:
     return result
 
 
-def _pattern_summary(pattern: dict) -> str:
+def _pattern_summary(pattern: dict, *, tz_name: str | None = None) -> str:
     schedule_type = pattern.get("type")
+    tz_label = tz_name or "UTC"
     if schedule_type == "interval":
         h = int(pattern.get("hours", 0) or 0)
         m = int(pattern.get("minutes", 0) or 0)
         return f"interval ({h}h {m}m)"
     if schedule_type == "daily":
         times = ", ".join(pattern.get("times", []))
-        return f"daily ({times} UTC)"
+        return f"daily ({times} {tz_label})"
     if schedule_type == "weekly":
         days = ", ".join(pattern.get("days", []))
         times = ", ".join(pattern.get("times", []))
-        return f"weekly ({days} at {times} UTC)"
+        return f"weekly ({days} at {times} {tz_label})"
     return "unknown"
 
 
@@ -154,8 +174,8 @@ async def newschedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
             return ConversationHandler.END
 
-        channel = await db.get_channel_by_telegram_id(telegram_channel_id)
-        if channel is None or int(channel["user_id"]) != update.effective_user.id:
+        channel = await db_access.get_channel_by_telegram_id_for_user(update.effective_user.id, telegram_channel_id)
+        if channel is None:
             await update.message.reply_text(
                 "Channel not found or you don't have permission to create schedules for it.\n"
                 "Use /listchannels to see your verified channels."
@@ -182,8 +202,8 @@ async def newschedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
             return ConversationHandler.END
 
-        channel = await db.get_channel_by_id(int(selected_channel_id))
-        if channel is None or int(channel["user_id"]) != update.effective_user.id:
+        channel = await db_access.get_channel_by_id_for_user(update.effective_user.id, int(selected_channel_id))
+        if channel is None:
             await update.message.reply_text(
                 "Your selected channel is missing or not owned by you.\n"
                 "Use /listchannels and /selectchannel again."
@@ -194,11 +214,22 @@ async def newschedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     context.user_data["ns_channel_db_id"] = int(channel["id"])
     context.user_data["ns_channel_name"] = str(channel["channel_name"])
+    context.user_data["ns_timezone"] = await _effective_user_timezone_name(update.effective_user.id)
 
     # Remind which channel we are creating a schedule for.
     details = await db.get_user_context_details(update.effective_user.id)
     header = selection_segments(details)
-    msg_text, msg_entities = render([*header, Segment("\n\nEnter a schedule name (or /cancel).")])
+    tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
+    msg_text, msg_entities = render(
+        [
+            *header,
+            Segment("\n\nTimezone: "),
+            Segment(tz_name, code=True),
+            Segment(" (change with "),
+            Segment("/settimezone"),
+            Segment(")\n\nEnter a schedule name (or /cancel)."),
+        ]
+    )
     await update.message.reply_text(msg_text, entities=msg_entities)
     return NS_WAIT_NAME
 
@@ -240,10 +271,11 @@ async def newschedule_set_type(update: Update, context: ContextTypes.DEFAULT_TYP
         return NS_WAIT_INTERVAL
 
     if schedule_type == "daily":
+        tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
         await update.message.reply_text(
-            "Enter times in UTC (HH:MM) separated by commas.\n"
+            f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
             "Example: 09:00,16:00\n"
-            "Note: times are interpreted as UTC (not your local timezone)."
+            "Tip: change your default timezone with /settimezone."
         )
         return NS_WAIT_DAILY_TIMES
 
@@ -285,7 +317,10 @@ async def newschedule_set_daily_times(update: Update, context: ContextTypes.DEFA
 
     times = _parse_times_csv(update.message.text or "")
     if times is None:
-        await update.message.reply_text("Invalid times. Use UTC HH:MM separated by commas.")
+        tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
+        await update.message.reply_text(
+            f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
+        )
         return NS_WAIT_DAILY_TIMES
 
     pattern = {"type": "daily", "times": times}
@@ -305,10 +340,11 @@ async def newschedule_set_weekly_days(update: Update, context: ContextTypes.DEFA
         return NS_WAIT_WEEKLY_DAYS
 
     context.user_data["ns_days"] = days
+    tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
     await update.message.reply_text(
-        "Enter times in UTC (HH:MM) separated by commas.\n"
+        f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
         "Example: 12:00\n"
-        "Note: times are interpreted as UTC (not your local timezone)."
+        "Tip: change your default timezone with /settimezone."
     )
     return NS_WAIT_WEEKLY_TIMES
 
@@ -320,7 +356,10 @@ async def newschedule_set_weekly_times(update: Update, context: ContextTypes.DEF
 
     times = _parse_times_csv(update.message.text or "")
     if times is None:
-        await update.message.reply_text("Invalid times. Use UTC HH:MM separated by commas.")
+        tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
+        await update.message.reply_text(
+            f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
+        )
         return NS_WAIT_WEEKLY_TIMES
 
     days = context.user_data.get("ns_days") or []
@@ -339,7 +378,7 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
 
     channel_db_id = int(context.user_data.get("ns_channel_db_id"))
     name = str(context.user_data.get("ns_name"))
-    timezone_name = _default_timezone_name()
+    timezone_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
 
     schedule = await db.create_schedule(
         channel_db_id=channel_db_id,
@@ -365,7 +404,7 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
         Segment("\nChannel: "),
         Segment(channel_name),
         Segment("\nPattern: "),
-        Segment(_pattern_summary(pattern)),
+        Segment(_pattern_summary(pattern, tz_name=timezone_name)),
         Segment("\nState: paused\n"),
         Segment("Next steps: /resumeschedule "),
         Segment(str(schedule["id"]), code=True),
@@ -442,8 +481,8 @@ async def list_schedules_command(update: Update, context: ContextTypes.DEFAULT_T
             await update.message.reply_text("Could not resolve that channel.")
             return
 
-        channel = await db.get_channel_by_telegram_id(telegram_channel_id)
-        if channel is None or int(channel["user_id"]) != update.effective_user.id:
+        channel = await db_access.get_channel_by_telegram_id_for_user(update.effective_user.id, telegram_channel_id)
+        if channel is None:
             await update.message.reply_text("Channel not found or not owned by you.")
             return
 
@@ -465,8 +504,8 @@ async def list_schedules_command(update: Update, context: ContextTypes.DEFAULT_T
             )
             return
 
-        channel = await db.get_channel_by_id(int(selected_channel_id))
-        if channel is None or int(channel["user_id"]) != update.effective_user.id:
+        channel = await db_access.get_channel_by_id_for_user(update.effective_user.id, int(selected_channel_id))
+        if channel is None:
             await update.message.reply_text(
                 "Your selected channel is missing or not owned by you.\n"
                 "Use /listchannels and /selectchannel again."
@@ -496,6 +535,7 @@ async def list_schedules_command(update: Update, context: ContextTypes.DEFAULT_T
     ]
     for s in schedules:
         pattern = s.get("pattern") or {}
+        tz_name = str(s.get("timezone") or _default_timezone_name())
         segments += [
             Segment("- "),
             Segment(str(s["id"]), code=True),
@@ -504,7 +544,7 @@ async def list_schedules_command(update: Update, context: ContextTypes.DEFAULT_T
             Segment(" ["),
             Segment(str(s["state"])),
             Segment("] "),
-            Segment(_pattern_summary(pattern)),
+            Segment(_pattern_summary(pattern, tz_name=tz_name)),
             Segment("\n"),
         ]
 
@@ -512,6 +552,104 @@ async def list_schedules_command(update: Update, context: ContextTypes.DEFAULT_T
     segments += selection_segments(await db.get_user_context_details(update.effective_user.id))
 
     text, entities = render(segments)
+    await update.message.reply_text(text, entities=entities)
+
+
+async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set a schedule's timezone (used for daily/weekly interpretation and display)."""
+    await ensure_user_record(update, context)
+
+    if update.message is None or update.effective_user is None:
+        return
+
+    user_id = update.effective_user.id
+
+    schedule_id: int | None = None
+    tz_arg: str | None = None
+
+    if len(context.args) == 2:
+        schedule_id = _parse_schedule_id(context.args[0])
+        tz_arg = context.args[1]
+    elif len(context.args) == 1:
+        tz_arg = context.args[0]
+        user_ctx = await db.get_user_context(user_id)
+        raw = user_ctx.get("selected_schedule_id")
+        schedule_id = int(raw) if raw is not None else None
+    else:
+        tz_default = await _effective_user_timezone_name(user_id)
+        text, entities = render(
+            [
+                Segment("Usage: "),
+                Segment("/setscheduletimezone"),
+                Segment(" "),
+                Segment("<schedule_id>", code=True),
+                Segment(" "),
+                Segment("<timezone>", code=True),
+                Segment("\nTip: if you have a selected schedule, you can omit <schedule_id>:\n"),
+                Segment("/setscheduletimezone"),
+                Segment(" "),
+                Segment(tz_default, code=True),
+            ]
+        )
+        await update.message.reply_text(text, entities=entities)
+        return
+
+    if schedule_id is None:
+        await update.message.reply_text(
+            "No schedule selected.\n"
+            "Usage: /setscheduletimezone <schedule_id> <timezone>\n"
+            "Tip: select a schedule first with /selectschedule <schedule_id>."
+        )
+        return
+
+    schedule = await db.get_schedule_for_user(user_id, schedule_id)
+    if schedule is None:
+        await update.message.reply_text("Schedule not found or not owned by you.")
+        return
+
+    raw_tz = (tz_arg or "").strip()
+    if not raw_tz:
+        await update.message.reply_text("Timezone cannot be empty.")
+        return
+
+    if raw_tz.lower() in {"default", "reset", "clear"}:
+        tz_name = await _effective_user_timezone_name(user_id)
+    else:
+        tz_name = raw_tz
+
+    if not _is_valid_timezone_name(tz_name):
+        text, entities = render(
+            [
+                Segment("Unknown timezone: "),
+                Segment(tz_name, code=True),
+                Segment("\nUse an IANA timezone name like "),
+                Segment("Europe/Amsterdam", code=True),
+                Segment(", "),
+                Segment("UTC", code=True),
+                Segment("."),
+            ]
+        )
+        await update.message.reply_text(text, entities=entities)
+        return
+
+    old_tz = str(schedule.get("timezone") or _default_timezone_name())
+    await db.update_schedule_timezone(schedule_id, timezone_name=tz_name)
+
+    text, entities = render(
+        [
+            Segment("Schedule "),
+            Segment(str(schedule_id), code=True),
+            Segment(" timezone updated: "),
+            Segment(old_tz, code=True),
+            Segment(" → "),
+            Segment(tz_name, code=True),
+            Segment(".\n\n"),
+            Segment("Note: daily/weekly schedule times are interpreted in the schedule timezone.\n"),
+            Segment("Preview with "),
+            Segment("/testschedule"),
+            Segment("."),
+        ]
+    )
     await update.message.reply_text(text, entities=entities)
 
 
@@ -693,8 +831,8 @@ async def copy_schedule_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Could not resolve target channel.")
         return
 
-    target_channel = await db.get_channel_by_telegram_id(target_channel_id)
-    if target_channel is None or int(target_channel["user_id"]) != update.effective_user.id:
+    target_channel = await db_access.get_channel_by_telegram_id_for_user(update.effective_user.id, target_channel_id)
+    if target_channel is None:
         await update.message.reply_text("Target channel not found or not owned by you.")
         return
 
@@ -759,6 +897,7 @@ async def editschedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["es_schedule_id"] = schedule_id
     context.user_data["es_current_name"] = schedule.get("name")
     context.user_data["es_current_pattern"] = schedule.get("pattern")
+    context.user_data["es_timezone"] = str(schedule.get("timezone") or _default_timezone_name())
 
     details = await db.get_user_context_details(update.effective_user.id)
     text, entities = render(
@@ -829,10 +968,11 @@ async def editschedule_set_type(update: Update, context: ContextTypes.DEFAULT_TY
         return ES_WAIT_INTERVAL
 
     if schedule_type == "daily":
+        tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
         await update.message.reply_text(
-            "Enter times in UTC (HH:MM) separated by commas.\n"
+            f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
             "Example: 09:00,16:00\n"
-            "Note: times are interpreted as UTC (not your local timezone)."
+            "Tip: schedule timezone is set when the schedule is created."
         )
         return ES_WAIT_DAILY_TIMES
 
@@ -874,7 +1014,10 @@ async def editschedule_set_daily_times(update: Update, context: ContextTypes.DEF
 
     times = _parse_times_csv(update.message.text or "")
     if times is None:
-        await update.message.reply_text("Invalid times. Use UTC HH:MM separated by commas.")
+        tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
+        await update.message.reply_text(
+            f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
+        )
         return ES_WAIT_DAILY_TIMES
 
     pattern = {"type": "daily", "times": times}
@@ -894,10 +1037,11 @@ async def editschedule_set_weekly_days(update: Update, context: ContextTypes.DEF
         return ES_WAIT_WEEKLY_DAYS
 
     context.user_data["es_days"] = days
+    tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
     await update.message.reply_text(
-        "Enter times in UTC (HH:MM) separated by commas.\n"
+        f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
         "Example: 12:00\n"
-        "Note: times are interpreted as UTC (not your local timezone)."
+        "Tip: schedule timezone is set when the schedule is created."
     )
     return ES_WAIT_WEEKLY_TIMES
 
@@ -909,7 +1053,10 @@ async def editschedule_set_weekly_times(update: Update, context: ContextTypes.DE
 
     times = _parse_times_csv(update.message.text or "")
     if times is None:
-        await update.message.reply_text("Invalid times. Use UTC HH:MM separated by commas.")
+        tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
+        await update.message.reply_text(
+            f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
+        )
         return ES_WAIT_WEEKLY_TIMES
 
     days = context.user_data.get("es_days") or []
@@ -929,12 +1076,13 @@ async def _editschedule_finalize(update: Update, context: ContextTypes.DEFAULT_T
     schedule_id = int(context.user_data.get("es_schedule_id"))
     await db.update_schedule_pattern(schedule_id, pattern)
 
+    tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
     text, entities = render(
         [
             Segment("Schedule "),
             Segment(str(schedule_id), code=True),
             Segment(" updated.\nPattern: "),
-            Segment(_pattern_summary(pattern)),
+            Segment(_pattern_summary(pattern, tz_name=tz_name)),
         ]
     )
     await update.message.reply_text(text, entities=entities)

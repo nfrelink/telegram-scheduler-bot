@@ -25,6 +25,7 @@ async def _verify() -> None:
     await init_database()
 
     expected_tables = {
+        "schema_migrations",
         "users",
         "channels",
         "schedules",
