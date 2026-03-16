@@ -32,7 +32,12 @@ from handlers.selection import (
     selection_command,
 )
 from handlers.menu import menu_callback, menu_command
-from handlers.timezone_management import gettimezone_command, settimezone_command
+from handlers.timezone_management import (
+    gettimezone_command,
+    settimezone_command,
+    timezone_callback,
+    timezone_command,
+)
 from handlers.user_commands import help_command, start_command
 from handlers.verification import add_channel_command, channel_post_handler
 
@@ -83,8 +88,10 @@ def create_application() -> Application:
     application.add_handler(
         MessageHandler(filters.Regex(re.compile(r"^Menu$")) & filters.ChatType.PRIVATE, menu_command)
     )
+    application.add_handler(CommandHandler("timezone", timezone_command))
     application.add_handler(CommandHandler("gettimezone", gettimezone_command))
     application.add_handler(CommandHandler("settimezone", settimezone_command))
+    application.add_handler(CallbackQueryHandler(timezone_callback, pattern=r"^tz:"))
 
     # Channel verification and management
     application.add_handler(CommandHandler("addchannel", add_channel_command))

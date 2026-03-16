@@ -166,7 +166,9 @@ async def _schedule_card(
         return None
 
     channel_id = int(schedule["channel_id"])
-    tz_name = str(schedule.get("timezone") or "UTC")
+    schedule_tz = str(schedule.get("timezone") or "UTC")
+    user_tz = await db.get_user_timezone(user_id)
+    display_tz = user_tz or schedule_tz
     state = str(schedule.get("state") or "unknown")
     name = str(schedule.get("name") or f"Schedule {schedule_id}")
     total = await db.get_queue_count(schedule_id)
@@ -176,12 +178,12 @@ async def _schedule_card(
     if state == "active":
         try:
             next_run = calculate_next_run(schedule, after=datetime.now(timezone.utc))
-            next_run_str = _fmt_dt(next_run, tz_name=tz_name)
+            next_run_str = _fmt_dt(next_run, tz_name=display_tz)
         except Exception:
             next_run_str = "error"
 
     completion = _est_completion(schedule, total)
-    completion_str = _fmt_dt(completion, tz_name=tz_name) if completion else "n/a"
+    completion_str = _fmt_dt(completion, tz_name=display_tz) if completion else "n/a"
 
     state_pretty = {
         "active": "Active",
@@ -189,11 +191,15 @@ async def _schedule_card(
         "empty_paused": "Paused (empty queue)",
     }.get(state, state)
 
+    tz_line = schedule_tz
+    if user_tz and user_tz != schedule_tz:
+        tz_line = f"{schedule_tz} (displayed in {user_tz})"
+
     segments: list[Segment] = [
         Segment(name, code=True),
         Segment(f"\nState: {state_pretty} | Queue: {total} post(s)\n"),
         Segment(f"Pattern: {_pattern_summary(pattern)}\n"),
-        Segment(f"Timezone: {tz_name}\n"),
+        Segment(f"Timezone: {tz_line}\n"),
         Segment(f"Next run: {next_run_str}\n"),
         Segment(f"Est. completion: {completion_str}"),
     ]

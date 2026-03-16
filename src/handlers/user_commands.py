@@ -10,6 +10,7 @@ from telegram.ext import ContextTypes
 from database import queries as db
 from .common import ensure_user_record
 from .menu import PERSISTENT_KEYBOARD
+from .timezone_management import send_timezone_prompt
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
@@ -23,8 +24,9 @@ def _help_text() -> str:
         "- /help — Show this help\n"
         "\n"
         "Timezone:\n"
-        "- /gettimezone — Show your default timezone\n"
-        "- /settimezone <timezone> — Set your default timezone (IANA name) for new schedules\n"
+        "- /timezone — Set your timezone (guided selection)\n"
+        "- /gettimezone — Show your current timezone\n"
+        "- /settimezone <timezone> — Set timezone by IANA name (power user)\n"
         "\n"
         "Channels:\n"
         "- /addchannel <@channel or -100...> — Verify a channel\n"
@@ -73,11 +75,6 @@ def _help_text() -> str:
 def _onboarding_segments() -> list[Segment]:
     return [
         Segment("Quick start:\n"),
-        Segment("Tip: set your default timezone with "),
-        Segment("/settimezone"),
-        Segment(" (example: "),
-        Segment("Europe/Amsterdam", code=True),
-        Segment("). New schedules will interpret times in that timezone.\n\n"),
         Segment("1) Add this bot to your channel as an administrator (with permission to post messages)\n"),
         Segment("2) In the channel, post "),
         Segment("/channelid"),
@@ -107,11 +104,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """Welcome message with command overview."""
     await ensure_user_record(update, context)
 
-    if update.message is None:
+    if update.message is None or update.effective_user is None:
         return
 
+    user_id = update.effective_user.id
     try:
-        details = await db.get_user_context_details(update.effective_user.id) if update.effective_user else {}
+        details = await db.get_user_context_details(user_id)
 
         segments: list[Segment] = [
             Segment("Telegram Scheduler Bot is running.\n\n"),
@@ -128,10 +126,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         text, entities = render(segments)
         await update.message.reply_text(text, entities=entities, reply_markup=PERSISTENT_KEYBOARD)
-        user_id = update.effective_user.id if update.effective_user else None
+
+        # If timezone is not yet configured, prompt immediately after welcome.
+        if not await db.get_user_timezone(user_id):
+            await send_timezone_prompt(
+                chat_id=update.effective_chat.id,
+                bot=context.bot,
+            )
+
         logger.info("Handled /start for user_id=%s", user_id)
     except Exception as e:
-        user_id = update.effective_user.id if update.effective_user else None
         logger.error("Error in start_command for user_id=%s: %s", user_id, e, exc_info=True)
         await update.message.reply_text("An error occurred. Please try again.")
 

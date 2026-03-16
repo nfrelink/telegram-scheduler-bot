@@ -231,7 +231,9 @@ async def _build_queue_page(
     if schedule is None:
         return None
 
-    tz_name = str(schedule.get("timezone") or "UTC")
+    schedule_tz = str(schedule.get("timezone") or "UTC")
+    user_tz = await db.get_user_timezone(user_id)
+    tz_name = user_tz or schedule_tz
     total = await db.get_queue_count(schedule_id)
 
     if total == 0:
