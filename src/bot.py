@@ -5,14 +5,14 @@ from __future__ import annotations
 import logging
 import os
 
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from handlers.admin import broadcast_command, debug_command, stats_command
 from handlers.channel_info import channelid_command
 from handlers.channel_management import list_channels_command, remove_channel_command
 from handlers.bulk_upload import bulk_upload_conversation_handler
 from handlers.forwarding import addforward_command, clearforward_command, forwarding_command, removeforward_command
-from handlers.queue_management import delete_post_command, test_schedule_command, view_queue_command
+from handlers.queue_management import delete_post_command, queue_browser_callback, test_schedule_command, view_queue_command
 from handlers.schedule_management import (
     copy_schedule_command,
     delete_schedule_command,
@@ -114,6 +114,7 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("viewqueue", view_queue_command))
     application.add_handler(CommandHandler("deletepost", delete_post_command))
     application.add_handler(CommandHandler("testschedule", test_schedule_command))
+    application.add_handler(CallbackQueryHandler(queue_browser_callback, pattern=r"^qv:"))
 
     # Channel posts: verification code detection
     application.add_handler(

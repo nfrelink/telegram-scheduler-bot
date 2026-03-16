@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, InputMediaPhoto, InputMediaVideo, Update
 from telegram.ext import ContextTypes
 
 from database import queries as db
@@ -53,8 +54,409 @@ def _media_group_is_forwarded(media_group_data: object) -> bool:
     return first.get("forward_from_chat_id") is not None and first.get("forward_from_message_id") is not None
 
 
+# ---------------------------------------------------------------------------
+# Queue browser — callback data tokens
+# Format: qv:go:{schedule_id}:{offset}
+#         qv:da:{post_id}:{schedule_id}:{offset}   (delete ask)
+#         qv:do:{post_id}:{schedule_id}:{offset}   (delete confirmed)
+#         qv:noop                                    (non-interactive position button)
+# ---------------------------------------------------------------------------
+_CB_GO = "qv:go"
+_CB_DEL_ASK = "qv:da"
+_CB_DEL_OK = "qv:do"
+_CB_NOOP = "qv:noop"
+
+
+@dataclass
+class _QueuePage:
+    text: str
+    entities: list | None
+    keyboard: InlineKeyboardMarkup
+    file_id: str | None = None
+    file_media_type: str | None = None  # 'photo', 'video', 'document'
+    is_empty: bool = False
+
+
+def _first_media_from_group(post: dict[str, Any]) -> tuple[str, str] | None:
+    """Return (file_id, media_type) for the first displayable item in a media group."""
+    media_group_data = post.get("media_group_data")
+    if not media_group_data:
+        return None
+    try:
+        items = json.loads(media_group_data)
+        if items and isinstance(items[0], dict):
+            fid = items[0].get("file_id")
+            mt = items[0].get("media_type")
+            if fid and mt in ("photo", "video", "document"):
+                return str(fid), str(mt)
+    except Exception:
+        pass
+    return None
+
+
+def _to_input_media(
+    *,
+    file_id: str,
+    media_type: str,
+    caption: str | None,
+    caption_entities: list | None,
+) -> InputMediaPhoto | InputMediaVideo | InputMediaDocument:
+    match media_type:
+        case "photo":
+            return InputMediaPhoto(media=file_id, caption=caption, caption_entities=caption_entities)
+        case "video":
+            return InputMediaVideo(media=file_id, caption=caption, caption_entities=caption_entities)
+        case _:
+            return InputMediaDocument(media=file_id, caption=caption, caption_entities=caption_entities)
+
+
+def _get_display_caption(post: dict[str, Any]) -> str | None:
+    """Return the caption text for a post, checking media_group_data if needed."""
+    caption = (post.get("caption") or "").strip()
+    if caption:
+        return caption
+    media_group_data = post.get("media_group_data")
+    if media_group_data:
+        try:
+            items = json.loads(media_group_data)
+            if items and isinstance(items[0], dict):
+                return (items[0].get("caption") or "").strip() or None
+        except Exception:
+            pass
+    return None
+
+
+def _is_native_forward(post: dict[str, Any]) -> bool:
+    return (
+        post.get("forward_from_chat_id") is not None
+        or _media_group_is_forwarded(post.get("media_group_data"))
+    )
+
+
+def _format_dt_browser(dt: datetime, *, tz_name: str | None = None) -> str:
+    """Format a datetime as 'Mon 28 Mar 2026, 14:00' in the given timezone."""
+    tz = timezone.utc
+    if tz_name:
+        try:
+            tz = ZoneInfo(tz_name)
+        except Exception:
+            tz = timezone.utc
+    local = dt.astimezone(tz)
+    return local.strftime(f"%a {local.day} %b %Y, %H:%M")
+
+
+def _estimate_send_time(schedule: dict[str, Any], offset: int) -> datetime | None:
+    """Estimate when the post at the given queue offset will be sent."""
+    cursor = datetime.now(timezone.utc)
+    try:
+        for _ in range(offset + 1):
+            cursor = calculate_next_run(schedule, after=cursor)
+        return cursor
+    except Exception:
+        return None
+
+
+def _estimate_completion(schedule: dict[str, Any], count: int) -> datetime | None:
+    """Estimate when the last post in a queue of `count` posts will be sent."""
+    if count <= 0:
+        return None
+    cursor = datetime.now(timezone.utc)
+    try:
+        for _ in range(min(count, 1000)):
+            cursor = calculate_next_run(schedule, after=cursor)
+        return cursor
+    except Exception:
+        return None
+
+
+def _queue_nav_keyboard(
+    *,
+    schedule_id: int,
+    offset: int,
+    total: int,
+    post_id: int,
+) -> InlineKeyboardMarkup:
+    prev_btn = (
+        InlineKeyboardButton("< Prev", callback_data=f"{_CB_GO}:{schedule_id}:{offset - 1}")
+        if offset > 0
+        else InlineKeyboardButton("-", callback_data=_CB_NOOP)
+    )
+    pos_btn = InlineKeyboardButton(f"{offset + 1} / {total}", callback_data=_CB_NOOP)
+    next_btn = (
+        InlineKeyboardButton("Next >", callback_data=f"{_CB_GO}:{schedule_id}:{offset + 1}")
+        if offset < total - 1
+        else InlineKeyboardButton("-", callback_data=_CB_NOOP)
+    )
+    delete_btn = InlineKeyboardButton(
+        "Delete this post",
+        callback_data=f"{_CB_DEL_ASK}:{post_id}:{schedule_id}:{offset}",
+    )
+    return InlineKeyboardMarkup([[prev_btn, pos_btn, next_btn], [delete_btn]])
+
+
+def _queue_confirm_keyboard(
+    *,
+    post_id: int,
+    schedule_id: int,
+    offset: int,
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "Confirm delete",
+                    callback_data=f"{_CB_DEL_OK}:{post_id}:{schedule_id}:{offset}",
+                ),
+                InlineKeyboardButton(
+                    "Cancel",
+                    callback_data=f"{_CB_GO}:{schedule_id}:{offset}",
+                ),
+            ]
+        ]
+    )
+
+
+async def _build_queue_page(
+    *,
+    user_id: int,
+    schedule_id: int,
+    offset: int,
+) -> _QueuePage | None:
+    """Build one page of the queue browser.
+
+    Returns a _QueuePage or None if the schedule is not found / not owned.
+    Offset is clamped to the valid range automatically.
+    """
+    schedule = await db.get_schedule_for_user(user_id, schedule_id)
+    if schedule is None:
+        return None
+
+    tz_name = str(schedule.get("timezone") or "UTC")
+    total = await db.get_queue_count(schedule_id)
+
+    if total == 0:
+        schedule_name = str(schedule.get("name") or f"Schedule {schedule_id}")
+        segments = [
+            Segment(f"Queue: {schedule_name} — schedule "),
+            Segment(str(schedule_id), code=True),
+            Segment("\nQueue is empty."),
+        ]
+        text, entities = render(segments)
+        return _QueuePage(
+            text=text,
+            entities=entities or None,
+            keyboard=InlineKeyboardMarkup([]),
+            is_empty=True,
+        )
+
+    offset = max(0, min(offset, total - 1))
+
+    posts = await db.get_queued_posts(schedule_id, limit=1, offset=offset)
+    if not posts:
+        return None
+
+    post = posts[0]
+    post_id = int(post["id"])
+    media_type = str(post.get("media_type") or "unknown")
+    retry_count = int(post.get("retry_count") or 0)
+    is_forward = _is_native_forward(post)
+    caption = _get_display_caption(post)
+
+    # Resolve which file to display and what Telegram media type it is.
+    display_file_id: str | None = None
+    display_media_type: str | None = None
+    if media_type in ("photo", "video", "document"):
+        raw_fid = post.get("file_id")
+        if raw_fid:
+            display_file_id = str(raw_fid)
+            display_media_type = media_type
+    elif media_type == "media_group":
+        group_result = _first_media_from_group(post)
+        if group_result:
+            display_file_id, display_media_type = group_result
+
+    scheduled_for = parse_timestamp(post.get("scheduled_for"))
+    est_send = scheduled_for or _estimate_send_time(schedule, offset)
+    completion = _estimate_completion(schedule, total)
+
+    schedule_name = str(schedule.get("name") or f"Schedule {schedule_id}")
+    state = str(schedule.get("state") or "unknown")
+
+    segments: list[Segment] = [
+        Segment(f"Queue: {schedule_name} — schedule "),
+        Segment(str(schedule_id), code=True),
+        Segment(f"\nState: {state} | Total: {total} post(s)\n"),
+    ]
+    if completion:
+        segments.append(Segment(f"Est. completion: {_format_dt_browser(completion, tz_name=tz_name)} ({tz_name})\n"))
+
+    segments.append(Segment(f"\nPost {offset + 1} of {total}\n"))
+
+    if media_type == "media_group":
+        try:
+            album_count = len(json.loads(post.get("media_group_data") or "[]"))
+        except Exception:
+            album_count = 0
+        type_label = f"album ({album_count} items)" + (" — native forward" if is_forward else "")
+    else:
+        type_label = media_type + (" — native forward" if is_forward else "")
+    segments.append(Segment(f"Type: {type_label}\n"))
+
+    if not is_forward:
+        if caption:
+            preview = caption[:60] + ("..." if len(caption) > 60 else "")
+            segments.append(Segment(f"Caption: \"{preview}\"\n"))
+        else:
+            segments.append(Segment("Caption: none\n"))
+
+    if retry_count:
+        segments.append(Segment(f"Retries: {retry_count}\n"))
+
+    if est_send:
+        segments.append(Segment(f"Est. send: {_format_dt_browser(est_send, tz_name=tz_name)} ({tz_name})"))
+
+    text, entities = render(segments)
+    keyboard = _queue_nav_keyboard(
+        schedule_id=schedule_id,
+        offset=offset,
+        total=total,
+        post_id=post_id,
+    )
+    return _QueuePage(
+        text=text,
+        entities=entities or None,
+        keyboard=keyboard,
+        file_id=display_file_id,
+        file_media_type=display_media_type,
+    )
+
+
+async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle all qv:* inline keyboard callbacks for the queue browser."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return
+
+    await query.answer()
+    data = query.data or ""
+    user_id = update.effective_user.id
+
+    if data == _CB_NOOP:
+        return
+
+    parts = data.split(":")
+
+    if data.startswith(f"{_CB_GO}:"):
+        try:
+            schedule_id = int(parts[2])
+            offset = int(parts[3])
+        except (IndexError, ValueError):
+            await query.edit_message_caption("Navigation error.")
+            return
+
+        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
+        if page is None:
+            await query.edit_message_caption("Schedule not found or not owned by you.")
+            return
+
+        if page.file_id and page.file_media_type:
+            input_media = _to_input_media(
+                file_id=page.file_id,
+                media_type=page.file_media_type,
+                caption=page.text,
+                caption_entities=page.entities,
+            )
+            try:
+                await query.edit_message_media(input_media, reply_markup=page.keyboard)
+            except Exception:
+                pass
+        else:
+            try:
+                await query.edit_message_text(page.text, entities=page.entities, reply_markup=page.keyboard)
+            except Exception:
+                pass
+        return
+
+    if data.startswith(f"{_CB_DEL_ASK}:"):
+        try:
+            post_id = int(parts[2])
+            schedule_id = int(parts[3])
+            offset = int(parts[4])
+        except (IndexError, ValueError):
+            await query.edit_message_caption("Invalid data.")
+            return
+
+        post = await db.get_queued_post_with_owner(post_id)
+        if post is None or int(post["owner_user_id"]) != user_id:
+            await query.edit_message_caption("Post not found or not owned by you.")
+            return
+
+        keyboard = _queue_confirm_keyboard(post_id=post_id, schedule_id=schedule_id, offset=offset)
+        try:
+            # Keep the media visible so the user can see what they are about to delete.
+            await query.edit_message_caption(
+                f"Delete post {post_id} ({post.get('media_type')})?\nThis cannot be undone.",
+                reply_markup=keyboard,
+            )
+        except Exception:
+            pass
+        return
+
+    if data.startswith(f"{_CB_DEL_OK}:"):
+        try:
+            post_id = int(parts[2])
+            schedule_id = int(parts[3])
+            offset = int(parts[4])
+        except (IndexError, ValueError):
+            await query.edit_message_caption("Invalid data.")
+            return
+
+        post = await db.get_queued_post_with_owner(post_id)
+        if post is None or int(post["owner_user_id"]) != user_id:
+            await query.edit_message_caption("Post not found or not owned by you.")
+            return
+
+        await db.delete_queued_post(post_id)
+
+        # Stay at the same offset; _build_queue_page clamps it to the new total.
+        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
+        if page is None:
+            await query.edit_message_caption("Schedule not found.")
+            return
+
+        if page.is_empty:
+            # Clear the old media message's keyboard, then send a new text message.
+            try:
+                await query.edit_message_caption("Post deleted.", reply_markup=InlineKeyboardMarkup([]))
+            except Exception:
+                pass
+            msg = query.message
+            if msg is not None:
+                await context.bot.send_message(chat_id=msg.chat_id, text="The queue is now empty.")
+        else:
+            if page.file_id and page.file_media_type:
+                input_media = _to_input_media(
+                    file_id=page.file_id,
+                    media_type=page.file_media_type,
+                    caption=page.text,
+                    caption_entities=page.entities,
+                )
+                try:
+                    await query.edit_message_media(input_media, reply_markup=page.keyboard)
+                except Exception:
+                    pass
+            else:
+                try:
+                    await query.edit_message_text(page.text, entities=page.entities, reply_markup=page.keyboard)
+                except Exception:
+                    pass
+        return
+
+    logger.warning("Unhandled queue browser callback data: %r", data)
+
+
 async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """View next N posts in a schedule queue."""
+    """View the queue for a schedule as a navigable inline browser."""
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
         return
@@ -74,24 +476,15 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if schedule_id is None:
         await update.message.reply_text(
-            "Usage: /viewqueue <schedule_id> [count]\n"
+            "Usage: /viewqueue [schedule_id]\n"
             "Tip: select a default schedule with /selectschedule <schedule_id>."
         )
         return
-
-    limit = 10
-    if len(context.args) >= 2:
-        parsed_limit = _parse_int(context.args[1])
-        if parsed_limit is None or parsed_limit <= 0:
-            await update.message.reply_text("Invalid count.")
-            return
-        limit = min(parsed_limit, 50)
 
     schedule = await db.get_schedule_for_user(update.effective_user.id, schedule_id)
     if schedule is None:
         await update.message.reply_text("Schedule not found or not owned by you.")
         return
-    tz_name = str(schedule.get("timezone") or "UTC")
 
     if not used_selected:
         await db.set_user_context(
@@ -100,62 +493,31 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             selected_schedule_id=schedule_id,
         )
 
-    posts = await db.get_queued_posts(schedule_id, limit=limit)
-    if not posts:
-        details = await db.get_user_context_details(update.effective_user.id)
-        msg_text, msg_entities = render(
-            [Segment("Queue is empty.\n\n"), *selection_segments(details)]
-        )
-        await update.message.reply_text(msg_text, entities=msg_entities)
+    page = await _build_queue_page(
+        user_id=update.effective_user.id,
+        schedule_id=schedule_id,
+        offset=0,
+    )
+    if page is None:
+        await update.message.reply_text("Schedule not found or not owned by you.")
         return
 
-    now = datetime.now(timezone.utc)
-    cursor_time = calculate_next_run(schedule, after=now)
-
-    segments: list[Segment] = [
-        Segment(f"Next {len(posts)} queued posts for schedule "),
-        Segment(str(schedule_id), code=True),
-        Segment(f" (times shown in {tz_name}):\n"),
-    ]
-    for p in posts:
-        post_id = p.get("id")
-        media_type = p.get("media_type")
-        retry_count = p.get("retry_count", 0)
-
-        scheduled_for = parse_timestamp(p.get("scheduled_for"))
-        planned_time = scheduled_for or cursor_time
-        cursor_time = calculate_next_run(schedule, after=planned_time)
-
-        caption = (p.get("caption") or "").strip()
-        if len(caption) > 40:
-            caption = caption[:37] + "..."
-
-        extra = []
-        if caption:
-            extra.append(f"caption='{caption}'")
-        if retry_count:
-            extra.append(f"retries={retry_count}")
-        if p.get("forward_from_chat_id") is not None and p.get("forward_from_message_id") is not None:
-            extra.append("forwarded")
-        if media_type == "media_group" and _media_group_is_forwarded(p.get("media_group_data")):
-            extra.append("forwarded")
-
-        extra_text = f" ({', '.join(extra)})" if extra else ""
-
-        segments += [
-            Segment("- post "),
-            Segment(str(post_id), code=True),
-            Segment(": "),
-            Segment(str(media_type)),
-            Segment(" at "),
-            Segment(_format_dt(planned_time, tz_name=tz_name)),
-            Segment(extra_text),
-            Segment("\n"),
-        ]
-
-    segments += [Segment("\n"), *selection_segments(await db.get_user_context_details(update.effective_user.id))]
-    text, entities = render(segments)
-    await update.message.reply_text(text, entities=entities)
+    if page.file_id and page.file_media_type:
+        match page.file_media_type:
+            case "photo":
+                await update.message.reply_photo(
+                    page.file_id, caption=page.text, caption_entities=page.entities, reply_markup=page.keyboard
+                )
+            case "video":
+                await update.message.reply_video(
+                    page.file_id, caption=page.text, caption_entities=page.entities, reply_markup=page.keyboard
+                )
+            case _:
+                await update.message.reply_document(
+                    page.file_id, caption=page.text, caption_entities=page.entities, reply_markup=page.keyboard
+                )
+    else:
+        await update.message.reply_text(page.text, entities=page.entities, reply_markup=page.keyboard)
 
 
 async def delete_post_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
