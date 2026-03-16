@@ -7,9 +7,10 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from telegram import Message, MessageEntity, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageEntity, Update
 from telegram.constants import ChatType
 from telegram.ext import (
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -25,7 +26,7 @@ from utils.tg_text import Segment, render
 logger = logging.getLogger(__name__)
 
 
-SELECTING_CAPTION_MODE, WAITING_SINGLE_CAPTION, COLLECTING_MEDIA, CONFIRMING = range(4)
+SELECTING_CAPTION_MODE, WAITING_SINGLE_CAPTION, COLLECTING_MEDIA, CONFIRMING, DECIDING_SPLITS = range(5)
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,9 @@ class _CollectedItem:
     forward_from_message_id: int | None
     forward_origin_chat_id: int | None
     forward_origin_message_id: int | None
+    # The raw channel that the message was forwarded from, regardless of the
+    # allowlist.  Used to decide whether to show the album-split prompt.
+    raw_origin_chat_id: int | None = None
 
 
 def _state_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -230,27 +234,23 @@ def _message_to_collected_item(
     forward_origin_chat_id: int | None = None
     forward_origin_message_id: int | None = None
 
-    # Check the allowlist regardless of caption mode. If the message was forwarded
-    # from an allowlisted channel, record the forwarding refs so the executor can
-    # use bot.forward_message() and preserve attribution at send time.
+    # Always extract origin so we can detect forwarded albums later, even when
+    # the source channel is not on the allowlist.
+    raw_origin_chat_id, raw_origin_msg_id = _extract_forward_origin_channel(message)
+
     allow = forward_origin_allowlist or set()
-    if allow:
-        origin_chat_id, origin_msg_id = _extract_forward_origin_channel(message)
-        if origin_chat_id is not None and origin_chat_id in allow:
-            chat = getattr(message, "chat", None)
-            msg_id = getattr(message, "message_id", None)
-            chat_id_raw = getattr(chat, "id", None) if chat is not None else None
-            if chat_id_raw is not None and msg_id is not None:
-                try:
-                    forward_from_chat_id = int(chat_id_raw)
-                    forward_from_message_id = int(msg_id)
-                    forward_origin_chat_id = int(origin_chat_id)
-                    forward_origin_message_id = int(origin_msg_id) if origin_msg_id is not None else None
-                except (TypeError, ValueError):
-                    forward_from_chat_id = None
-                    forward_from_message_id = None
-                    forward_origin_chat_id = None
-                    forward_origin_message_id = None
+    if allow and raw_origin_chat_id is not None and raw_origin_chat_id in allow:
+        chat = getattr(message, "chat", None)
+        msg_id = getattr(message, "message_id", None)
+        chat_id_raw = getattr(chat, "id", None) if chat is not None else None
+        if chat_id_raw is not None and msg_id is not None:
+            try:
+                forward_from_chat_id = int(chat_id_raw)
+                forward_from_message_id = int(msg_id)
+                forward_origin_chat_id = int(raw_origin_chat_id)
+                forward_origin_message_id = int(raw_origin_msg_id) if raw_origin_msg_id is not None else None
+            except (TypeError, ValueError):
+                pass
 
     if message.photo:
         file_id = message.photo[-1].file_id
@@ -263,6 +263,7 @@ def _message_to_collected_item(
             forward_from_message_id=forward_from_message_id,
             forward_origin_chat_id=forward_origin_chat_id,
             forward_origin_message_id=forward_origin_message_id,
+            raw_origin_chat_id=raw_origin_chat_id,
         )
 
     if message.video:
@@ -275,6 +276,7 @@ def _message_to_collected_item(
             forward_from_message_id=forward_from_message_id,
             forward_origin_chat_id=forward_origin_chat_id,
             forward_origin_message_id=forward_origin_message_id,
+            raw_origin_chat_id=raw_origin_chat_id,
         )
 
     if message.document:
@@ -287,6 +289,7 @@ def _message_to_collected_item(
             forward_from_message_id=forward_from_message_id,
             forward_origin_chat_id=forward_origin_chat_id,
             forward_origin_message_id=forward_origin_message_id,
+            raw_origin_chat_id=raw_origin_chat_id,
         )
 
     return None
@@ -341,6 +344,122 @@ def _finalize_media_group_items(
         )
 
     return json.dumps(result)
+
+
+def _group_needs_split_prompt(items: list[_CollectedItem], allowlist: set[int]) -> bool:
+    """True if the group should trigger the keep-or-split prompt.
+
+    Only forwarded albums whose origin is NOT on the allowlist need a decision.
+    Locally uploaded albums and allowlisted-channel albums are always handled
+    silently (kept as album or forwarded natively, respectively).
+    """
+    if not items:
+        return False
+    origin = items[0].raw_origin_chat_id
+    if origin is None:
+        return False  # locally uploaded — keep as album without prompting
+    return origin not in allowlist  # non-allowlisted forward — ask
+
+
+def _build_split_prompt(count: int, placeholder_idx: int) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the text and inline keyboard for a single split decision."""
+    text = (
+        f"Forwarded album — {count} item(s).\n"
+        "Keep as one album post, or split into individual posts?"
+    )
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Keep as album", callback_data=f"sp:keep:{placeholder_idx}"),
+        InlineKeyboardButton(f"Split into {count}", callback_data=f"sp:split:{placeholder_idx}"),
+    ]])
+    return text, keyboard
+
+
+def _apply_split_decisions(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    caption_mode: str,
+    single_caption: str | None,
+    single_caption_entities: list[dict[str, Any]] | None,
+) -> None:
+    """Rebuild bulk_posts by applying all recorded keep/split decisions."""
+    posts = _get_posts(context)
+    decisions: dict[int, tuple[str, list[_CollectedItem]]] = context.user_data.pop(
+        "bulk_split_decisions", {}
+    )
+    if not decisions:
+        return
+
+    new_posts: list[dict[str, Any]] = []
+    for idx, post in enumerate(posts):
+        if idx in decisions:
+            action, items = decisions[idx]
+            if action == "keep":
+                new_post = dict(post)
+                new_post["media_group_data"] = _finalize_media_group_items(
+                    items,
+                    caption_mode=caption_mode,
+                    single_caption=single_caption,
+                    single_caption_entities=single_caption_entities,
+                )
+                new_post["media_type"] = "media_group"
+                new_posts.append(new_post)
+            else:  # "split"
+                for item in items:
+                    new_posts.append({
+                        "media_type": item.media_type,
+                        "file_id": item.file_id,
+                        "file_path": None,
+                        "caption": item.caption,
+                        "caption_parse_mode": None,
+                        "caption_entities": json.dumps(item.caption_entities) if item.caption_entities else None,
+                        "forward_from_chat_id": item.forward_from_chat_id,
+                        "forward_from_message_id": item.forward_from_message_id,
+                        "forward_origin_chat_id": item.forward_origin_chat_id,
+                        "forward_origin_message_id": item.forward_origin_message_id,
+                        "media_group_data": None,
+                    })
+        else:
+            new_posts.append(post)
+
+    context.user_data["bulk_posts"] = new_posts
+
+
+async def _show_confirmation_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    via_callback: bool = False,
+) -> int:
+    """Send the pre-queue confirmation summary and transition to CONFIRMING."""
+    posts = _get_posts(context)
+    counts: dict[str, int] = {}
+    for p in posts:
+        counts[p["media_type"]] = counts.get(p["media_type"], 0) + 1
+
+    parts = [f"{k}={v}" for k, v in sorted(counts.items())]
+    schedule_id = context.user_data.get("bulk_schedule_id")
+
+    user_id = update.effective_user.id if update.effective_user else 0
+    details = await db.get_user_context_details(user_id)
+    segments = [
+        Segment(f"Ready to queue {len(posts)} posts for schedule "),
+        Segment(str(schedule_id), code=True),
+        Segment(".\n"),
+        Segment(f"Breakdown: {', '.join(parts)}\n\n"),
+        Segment("Reply 'yes' to confirm, or 'no' to cancel.\n\n"),
+        *selection_segments(details),
+    ]
+    text, entities = render(segments)
+
+    if via_callback and update.callback_query is not None:
+        msg = update.callback_query.message
+        if msg is not None:
+            await context.bot.send_message(chat_id=msg.chat_id, text=text, entities=entities)
+    elif update.message is not None:
+        await update.message.reply_text(text, entities=entities)
+
+    context.user_data["bulk_in_confirming"] = True
+    return CONFIRMING
 
 
 async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -604,41 +723,48 @@ async def _flush_media_group(context: ContextTypes.DEFAULT_TYPE, *, group_id: st
 
 
 async def bulk_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Finalize collection and ask for confirmation."""
+    """Finalize collection, handle any split prompts, then ask for confirmation."""
     await ensure_user_record(update, context)
-    if update.message is None:
+    if update.message is None or update.effective_user is None:
         return ConversationHandler.END
 
-    # Flush any remaining media groups immediately.
-    groups = list(_get_media_groups(context).keys())
-    for gid in groups:
-        await _flush_media_group(context, group_id=gid)
+    allowlist = set(await db.get_forward_origin_allowlist(update.effective_user.id))
+
+    # Separate groups that need a user decision from those that can be flushed directly.
+    pending_splits: list[dict[str, Any]] = []
+    groups_snapshot = dict(_get_media_groups(context))
+
+    for gid, items in groups_snapshot.items():
+        if _group_needs_split_prompt(items, allowlist):
+            # Don't flush yet — pop from the buffer and store for the prompt loop.
+            _get_media_groups(context).pop(gid, None)
+            placeholder_idx = _get_media_group_indexes(context).pop(gid, None)
+            if placeholder_idx is not None:
+                pending_splits.append({
+                    "placeholder_idx": placeholder_idx,
+                    "items": items,
+                    "count": len(items),
+                })
+            else:
+                # No placeholder recorded — flush as album silently.
+                await _flush_media_group(context, group_id=gid)
+        else:
+            await _flush_media_group(context, group_id=gid)
 
     posts = _get_posts(context)
     if not posts:
         await update.message.reply_text("No posts collected yet. Send media, then /done.")
         return COLLECTING_MEDIA
 
-    counts: dict[str, int] = {}
-    for p in posts:
-        counts[p["media_type"]] = counts.get(p["media_type"], 0) + 1
+    if pending_splits:
+        context.user_data["bulk_pending_splits"] = pending_splits
+        context.user_data["bulk_split_decisions"] = {}
+        first = pending_splits[0]
+        text, keyboard = _build_split_prompt(first["count"], first["placeholder_idx"])
+        await update.message.reply_text(text, reply_markup=keyboard)
+        return DECIDING_SPLITS
 
-    parts = [f"{k}={v}" for k, v in sorted(counts.items())]
-    schedule_id = context.user_data.get("bulk_schedule_id")
-
-    details = await db.get_user_context_details(update.effective_user.id if update.effective_user else 0)
-    segments = [
-        Segment(f"Ready to queue {len(posts)} posts for schedule "),
-        Segment(str(schedule_id), code=True),
-        Segment(".\n"),
-        Segment(f"Breakdown: {', '.join(parts)}\n\n"),
-        Segment("Reply 'yes' to confirm, or 'no' to cancel.\n\n"),
-        *selection_segments(details),
-    ]
-    text, entities = render(segments)
-    await update.message.reply_text(text, entities=entities)
-    context.user_data["bulk_in_confirming"] = True
-    return CONFIRMING
+    return await _show_confirmation_message(update, context)
 
 
 async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -691,6 +817,66 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     return ConversationHandler.END
 
 
+async def bulk_split_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle keep/split decisions for forwarded albums during /done."""
+    query = update.callback_query
+    if query is None:
+        return DECIDING_SPLITS
+
+    await query.answer()
+    data = query.data or ""
+
+    pending: list[dict[str, Any]] = context.user_data.get("bulk_pending_splits", [])
+    if not pending:
+        # Nothing left to decide — proceed to confirmation.
+        caption_mode = _get_caption_mode(context) or "remove"
+        _apply_split_decisions(
+            context,
+            caption_mode=caption_mode,
+            single_caption=_get_single_caption(context),
+            single_caption_entities=_get_single_caption_entities(context),
+        )
+        return await _show_confirmation_message(update, context, via_callback=True)
+
+    current = pending[0]
+    expected_idx = current["placeholder_idx"]
+
+    if data.startswith("sp:keep:") or data.startswith("sp:split:"):
+        parts = data.split(":")
+        try:
+            idx = int(parts[2])
+        except (IndexError, ValueError):
+            return DECIDING_SPLITS
+
+        if idx != expected_idx:
+            await query.answer("This decision has already been processed.", show_alert=True)
+            return DECIDING_SPLITS
+
+        action = "keep" if data.startswith("sp:keep:") else "split"
+        decisions: dict[int, Any] = context.user_data.setdefault("bulk_split_decisions", {})
+        decisions[expected_idx] = (action, current["items"])
+        pending.pop(0)
+
+        if pending:
+            next_item = pending[0]
+            text, keyboard = _build_split_prompt(next_item["count"], next_item["placeholder_idx"])
+            try:
+                await query.edit_message_text(text, reply_markup=keyboard)
+            except Exception:
+                pass
+            return DECIDING_SPLITS
+
+    # All decisions recorded — apply and show confirmation.
+    caption_mode = _get_caption_mode(context) or "remove"
+    _apply_split_decisions(
+        context,
+        caption_mode=caption_mode,
+        single_caption=_get_single_caption(context),
+        single_caption_entities=_get_single_caption_entities(context),
+    )
+    return await _show_confirmation_message(update, context, via_callback=True)
+
+
 async def bulk_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
     _state_clear(context)
@@ -722,6 +908,10 @@ bulk_upload_conversation_handler = ConversationHandler(
                 filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
                 bulk_collect_media,
             ),
+        ],
+        DECIDING_SPLITS: [
+            CallbackQueryHandler(bulk_split_decision, pattern=r"^sp:"),
+            CommandHandler("cancel", bulk_cancel),
         ],
     },
     fallbacks=[CommandHandler("cancel", bulk_cancel)],
