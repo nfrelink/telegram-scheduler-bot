@@ -462,6 +462,26 @@ async def update_schedule_state(schedule_id: int, state: str) -> None:
         )
 
 
+async def resume_schedule(schedule_id: int) -> None:
+    """Set a schedule active and reset last_run_at to now.
+
+    Resetting last_run_at ensures the next post fires at the next scheduled
+    time *after* now rather than immediately (which would happen if last_run_at
+    is from a long time ago).
+    """
+    async with transaction() as db:
+        await db.execute(
+            """
+            UPDATE schedules
+            SET state = 'active',
+                last_run_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (schedule_id,),
+        )
+
+
 async def update_schedule_pattern(schedule_id: int, pattern: dict[str, Any]) -> None:
     """Update schedule pattern JSON."""
     async with transaction() as db:

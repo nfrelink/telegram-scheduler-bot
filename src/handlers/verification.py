@@ -219,11 +219,7 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             Segment(channel_name),
             Segment("' has been successfully verified.\n\n"),
             Segment(deletion_msg),
-            Segment("\n\nYou can now manage it with:\n"),
-            Segment("/listchannels\n"),
-            Segment("/removechannel "),
-            Segment(telegram_channel_id, code=True),
-            Segment("\n"),
+            Segment("\n\nUse /channels to manage your channels."),
         ]
     )
     await context.bot.send_message(

@@ -621,7 +621,7 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if schedule_id is None:
         await update.message.reply_text(
             "Usage: /viewqueue [schedule_id]\n"
-            "Tip: select a default schedule with /selectschedule <schedule_id>."
+            "Tip: use /select to pick a default schedule."
         )
         return
 
@@ -711,7 +711,7 @@ async def test_schedule_command(update: Update, context: ContextTypes.DEFAULT_TY
     if schedule_id is None:
         await update.message.reply_text(
             "Usage: /testschedule <schedule_id> [run_count]\n"
-            "Tip: select a default schedule with /selectschedule <schedule_id>."
+            "Tip: use /select to pick a default schedule."
         )
         return
 

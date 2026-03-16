@@ -173,11 +173,7 @@ async def _process_schedule(
                     Segment("' was paused because its pattern is invalid.\n"),
                     Segment("Reason: "),
                     Segment(str(reason)),
-                    Segment("\nFix it with /editschedule "),
-                    Segment(str(schedule_id), code=True),
-                    Segment(" or delete it with /deleteschedule "),
-                    Segment(str(schedule_id), code=True),
-                    Segment("."),
+                    Segment("\nUse /schedules to fix or delete it."),
                 ]
             ),
         )
@@ -250,11 +246,7 @@ async def _handle_empty_queue(bot: ExtBot, *, schedule: dict[str, Any], owner_us
                 Segment("' for channel '"),
                 Segment(channel_name),
                 Segment("' was paused because the queue is empty.\n"),
-                Segment("Add posts with /bulk "),
-                Segment(str(schedule_id), code=True),
-                Segment(", then resume with /resumeschedule "),
-                Segment(str(schedule_id), code=True),
-                Segment("."),
+                Segment("Add posts with /bulk, then use /schedules to resume."),
             ]
         ),
     )
@@ -308,9 +300,7 @@ async def _handle_post_failure(
                 Segment(str(post_id), code=True),
                 Segment("\nThe schedule has been paused.\nUse /deletepost "),
                 Segment(str(post_id), code=True),
-                Segment(" to remove the post, then /resumeschedule "),
-                Segment(str(schedule_id), code=True),
-                Segment("."),
+                Segment(" to remove the post, then use /schedules to resume."),
             ]
         ),
     )

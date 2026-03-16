@@ -192,9 +192,15 @@ async def _schedules_list_text_and_keyboard(
         count = await db.get_queue_count(s_id)
         state_label = _STATE_LABEL.get(state, state)
         tz = str(s.get("timezone") or "UTC")
+        pattern = s.get("pattern") or {}
+        pattern_label = _pattern_summary(pattern, tz_name=tz)
 
         rows.append([InlineKeyboardButton(
-            f"{name}  •  {state_label}  •  {count} queued  •  {tz}",
+            f"{name}  •  {state_label}  •  {count} queued",
+            callback_data="sm:noop",
+        )])
+        rows.append([InlineKeyboardButton(
+            pattern_label,
             callback_data="sm:noop",
         )])
         action_row: list[InlineKeyboardButton] = []
@@ -296,7 +302,7 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "Queue is empty — add posts with /bulk before resuming.", show_alert=True
             )
             return SM_SHOWING
-        await db.update_schedule_state(s_id, "active")
+        await db.resume_schedule(s_id)
         await _refresh_list(user_id, context, query)
         return SM_SHOWING
 
