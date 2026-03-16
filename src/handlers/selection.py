@@ -38,9 +38,7 @@ def selection_segments(details: dict) -> list[Segment]:
         segments += [
             Segment("- Channel: "),
             Segment(str(channel_name or telegram_channel_id)),
-            Segment(" ("),
-            Segment(str(telegram_channel_id), code=True),
-            Segment(")\n"),
+            Segment("\n"),
         ]
 
     if schedule_id:
@@ -49,8 +47,6 @@ def selection_segments(details: dict) -> list[Segment]:
         segments += [
             Segment("- Schedule: "),
             Segment(name_part),
-            Segment(" "),
-            Segment(str(schedule_id), code=True),
             Segment(state_part),
         ]
 

@@ -25,9 +25,7 @@ from telegram.ext import (
 from database import access as db_access
 from database import queries as db
 from handlers.common import ensure_user_record
-from handlers.selection import selection_segments
 from scheduler.timing import WEEKDAY_NAME_TO_INT, parse_time_string, validate_schedule_pattern
-from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
 
@@ -593,14 +591,11 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
         selected_channel_id=channel_db_id,
         selected_schedule_id=int(schedule["id"]),
     )
-    text, entities = render([
-        Segment("Schedule created.\n"),
-        Segment("ID: "),
-        Segment(str(schedule["id"]), code=True),
-        Segment(f"\nPattern: {_pattern_summary(pattern, tz_name=tz_name)}\n"),
-        Segment("State: paused — use /schedules to resume when ready."),
-    ])
-    await update.message.reply_text(text, entities=entities)
+    await update.message.reply_text(
+        f"Schedule '{name}' created.\n"
+        f"Pattern: {_pattern_summary(pattern, tz_name=tz_name)}\n"
+        "State: paused — use /schedules to resume when ready."
+    )
     _clear_ns_state(context)
     logger.info("User %s created schedule %s", update.effective_user.id, schedule["id"])
     return ConversationHandler.END
@@ -642,8 +637,7 @@ async def editschedule_set_name(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
     s_id = int(raw_id)
     await db.update_schedule_name(s_id, name=name)
-    text, entities = render([Segment("Schedule "), Segment(str(s_id), code=True), Segment(" renamed.")])
-    await update.message.reply_text(text, entities=entities)
+    await update.message.reply_text(f"Schedule renamed to '{name}'.")
     _clear_es_state(context)
     return ConversationHandler.END
 
@@ -751,12 +745,9 @@ async def _editschedule_finalize(update: Update, context: ContextTypes.DEFAULT_T
     s_id = int(raw_id)
     await db.update_schedule_pattern(s_id, pattern)
     tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
-    text, entities = render([
-        Segment("Schedule "),
-        Segment(str(s_id), code=True),
-        Segment(f" updated.\nPattern: {_pattern_summary(pattern, tz_name=tz_name)}"),
-    ])
-    await update.message.reply_text(text, entities=entities)
+    await update.message.reply_text(
+        f"Pattern updated: {_pattern_summary(pattern, tz_name=tz_name)}"
+    )
     _clear_es_state(context)
     logger.info("User %s updated schedule %s", update.effective_user.id, s_id)
     return ConversationHandler.END

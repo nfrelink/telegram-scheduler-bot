@@ -59,7 +59,7 @@ def _state_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _get_caption_mode(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     mode = context.user_data.get("bulk_caption_mode")
-    if mode in {"remove", "single"}:
+    if mode in {"remove", "single", "preserve"}:
         return str(mode)
     return None
 
@@ -496,10 +496,9 @@ async def _show_confirmation_message(
 
     user_id = update.effective_user.id if update.effective_user else 0
     details = await db.get_user_context_details(user_id)
+    schedule_name = str(details.get("schedule_name") or f"Schedule {schedule_id}")
     segments = [
-        Segment(f"Ready to queue {len(posts)} posts for schedule "),
-        Segment(str(schedule_id), code=True),
-        Segment(".\n"),
+        Segment(f"Ready to queue {len(posts)} posts for schedule '{schedule_name}'.\n"),
         Segment(f"Breakdown: {', '.join(parts)}\n\n"),
         Segment("Reply 'yes' to confirm, or 'no' to cancel.\n\n"),
         *selection_segments(details),
@@ -545,7 +544,7 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if schedule_id is None:
         await update.message.reply_text(
             "Usage: /bulk <schedule_id>\n"
-            "Tip: select a default schedule with /selectschedule <schedule_id>."
+            "Tip: use /select to pick a default schedule."
         )
         return ConversationHandler.END
 
@@ -565,14 +564,14 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["bulk_schedule_id"] = schedule_id
 
     details = await db.get_user_context_details(update.effective_user.id)
+    schedule_name = str(details.get("schedule_name") or schedule.get("name") or f"Schedule {schedule_id}")
     segments = [
-        Segment("Bulk upload started for schedule "),
-        Segment(str(schedule_id), code=True),
-        Segment(".\n\n"),
+        Segment(f"Bulk upload started for schedule '{schedule_name}'.\n\n"),
         *selection_segments(details),
         Segment("\n\nChoose caption mode by replying with one of:\n"),
         Segment("- remove (strip all captions)\n"),
-        Segment("- single (use one caption for all posts)\n\n"),
+        Segment("- single (use one caption for all posts)\n"),
+        Segment("- preserve (keep each post's original caption and formatting)\n\n"),
         Segment(
             "Tip: messages forwarded from channels in your /forwarding allowlist are always "
             "sent as native Telegram forwards, regardless of caption mode.\n"
@@ -594,8 +593,8 @@ async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TY
     # Backwards-compatible aliases (older prompts used these).
     if raw in {"markdown", "markdownv2", "md", "md2", "html"}:
         raw = "single"
-    if raw not in {"remove", "single"}:
-        await update.message.reply_text("Invalid caption mode. Reply with: remove, single")
+    if raw not in {"remove", "single", "preserve"}:
+        await update.message.reply_text("Invalid caption mode. Reply with: remove, single, preserve")
         return SELECTING_CAPTION_MODE
 
     context.user_data["bulk_caption_mode"] = raw
@@ -870,11 +869,10 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     _state_clear(context)
     details = await db.get_user_context_details(update.effective_user.id)
+    sched_name = str(schedule.get("name") or f"Schedule {schedule_id}")
     segments = [
-        Segment(f"Queued {inserted} posts.\n"),
-        Segment("Use /resumeschedule "),
-        Segment(str(schedule_id), code=True),
-        Segment(" to start posting.\n\n"),
+        Segment(f"Queued {inserted} posts for '{sched_name}'.\n"),
+        Segment("Use /schedules to resume posting when ready.\n\n"),
         *selection_segments(details),
     ]
     text, entities = render(segments)

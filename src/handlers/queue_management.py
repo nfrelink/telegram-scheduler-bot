@@ -304,9 +304,7 @@ async def _build_queue_page(
     if total == 0:
         schedule_name = str(schedule.get("name") or f"Schedule {schedule_id}")
         segments = [
-            Segment(f"Queue: {schedule_name} — schedule "),
-            Segment(str(schedule_id), code=True),
-            Segment("\nQueue is empty."),
+            Segment(f"Queue: {schedule_name}\nQueue is empty."),
         ]
         text, entities = render(segments)
         return _QueuePage(
@@ -351,9 +349,7 @@ async def _build_queue_page(
     state = str(schedule.get("state") or "unknown")
 
     segments: list[Segment] = [
-        Segment(f"Queue: {schedule_name} — schedule "),
-        Segment(str(schedule_id), code=True),
-        Segment(f"\nState: {state} | Total: {total} post(s)\n"),
+        Segment(f"Queue: {schedule_name}\nState: {state} | Total: {total} post(s)\n"),
     ]
     if completion:
         segments.append(Segment(f"Est. completion: {_format_dt_browser(completion, tz_name=tz_name)} ({tz_name})\n"))

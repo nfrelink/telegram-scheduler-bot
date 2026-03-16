@@ -41,12 +41,22 @@ async def _list_text_and_keyboard(user_id: int) -> tuple[str, InlineKeyboardMark
             [InlineKeyboardButton("Add channel", callback_data="fw:add")],
         ])
     else:
+        # Build a name lookup from the user's verified channels so we can show
+        # a friendly label instead of a raw numeric channel ID.
+        verified = await db.get_user_channels(user_id)
+        name_by_id: dict[str, str] = {
+            str(ch.get("channel_id") or ""): str(ch.get("channel_name") or "")
+            for ch in verified
+            if ch.get("channel_id") and ch.get("channel_name")
+        }
+
         n = len(origins)
         text = f"Forwarding allowlist — {n} channel{'s' if n > 1 else ''}:"
         rows: list[list[InlineKeyboardButton]] = []
         for cid in origins:
+            label = name_by_id.get(str(cid)) or str(cid)
             rows.append([
-                InlineKeyboardButton(str(cid), callback_data="fw:noop"),
+                InlineKeyboardButton(label, callback_data="fw:noop"),
                 InlineKeyboardButton("Remove", callback_data=f"fw:rm:{cid}"),
             ])
         rows.append([
