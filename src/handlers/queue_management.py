@@ -9,8 +9,11 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
+import re
+from datetime import date as _date
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument, InputMediaPhoto, InputMediaVideo, Update
-from telegram.ext import ContextTypes
+from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, ContextTypes, MessageHandler, filters
 
 from database import queries as db
 from database.time import parse_timestamp
@@ -60,12 +63,16 @@ def _media_group_is_forwarded(media_group_data: object) -> bool:
 #         qv:da:{post_id}:{schedule_id}:{offset}   (delete ask)
 #         qv:do:{post_id}:{schedule_id}:{offset}   (delete confirmed)
 #         qv:al:{post_id}                           (show full album)
+#         qv:pd:{post_id}                           (set pinned date — ConversationHandler entry)
+#         qv:cp:{post_id}:{schedule_id}:{offset}   (clear pinned date)
 #         qv:noop                                    (non-interactive position button)
 # ---------------------------------------------------------------------------
 _CB_GO = "qv:go"
 _CB_DEL_ASK = "qv:da"
 _CB_DEL_OK = "qv:do"
 _CB_ALBUM = "qv:al"
+_CB_PIN_DATE = "qv:pd"      # entry point for pin-date conversation
+_CB_CLEAR_PIN = "qv:cp"    # clear pinned_at — format: qv:cp:{post_id}:{schedule_id}:{offset}
 _CB_NOOP = "qv:noop"
 
 
@@ -214,6 +221,7 @@ def _queue_nav_keyboard(
     total: int,
     post_id: int,
     album_count: int = 0,
+    pinned_at: datetime | None = None,
 ) -> InlineKeyboardMarkup:
     prev_btn = (
         InlineKeyboardButton("< Prev", callback_data=f"{_CB_GO}:{schedule_id}:{offset - 1}")
@@ -235,6 +243,17 @@ def _queue_nav_keyboard(
         rows.append([InlineKeyboardButton(
             f"Show album ({album_count} items)",
             callback_data=f"{_CB_ALBUM}:{post_id}",
+        )])
+    if pinned_at is not None:
+        date_label = f"{pinned_at.day} {pinned_at.strftime('%b')}"
+        rows.append([InlineKeyboardButton(
+            f"Clear date ({date_label})",
+            callback_data=f"{_CB_CLEAR_PIN}:{post_id}:{schedule_id}:{offset}",
+        )])
+    else:
+        rows.append([InlineKeyboardButton(
+            "Set date",
+            callback_data=f"{_CB_PIN_DATE}:{post_id}",
         )])
     rows.append([delete_btn])
     return InlineKeyboardMarkup(rows)
@@ -323,6 +342,7 @@ async def _build_queue_page(
         if group_result:
             display_file_id, display_media_type = group_result
 
+    pinned_at = parse_timestamp(post.get("pinned_at"))
     scheduled_for = parse_timestamp(post.get("scheduled_for"))
     est_send = scheduled_for or _estimate_send_time(schedule, offset)
     completion = _estimate_completion(schedule, total)
@@ -361,7 +381,9 @@ async def _build_queue_page(
     if retry_count:
         segments.append(Segment(f"Retries: {retry_count}\n"))
 
-    if est_send:
+    if pinned_at is not None:
+        segments.append(Segment(f"Pinned to: {_format_dt_browser(pinned_at, tz_name=tz_name)} ({tz_name})"))
+    elif est_send:
         segments.append(Segment(f"Est. send: {_format_dt_browser(est_send, tz_name=tz_name)} ({tz_name})"))
 
     text, entities = render(segments)
@@ -371,6 +393,7 @@ async def _build_queue_page(
         total=total,
         post_id=post_id,
         album_count=album_count,
+        pinned_at=pinned_at,
     )
     return _QueuePage(
         text=text,
@@ -500,6 +523,45 @@ async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_T
                     await query.edit_message_text(page.text, entities=page.entities, reply_markup=page.keyboard)
                 except Exception:
                     pass
+        return
+
+    if data.startswith(f"{_CB_CLEAR_PIN}:"):
+        try:
+            post_id = int(parts[2])
+            schedule_id = int(parts[3])
+            offset = int(parts[4])
+        except (IndexError, ValueError):
+            await query.edit_message_caption("Invalid data.")
+            return
+
+        post = await db.get_queued_post_with_owner(post_id)
+        if post is None or int(post["owner_user_id"]) != user_id:
+            await query.edit_message_caption("Post not found or not owned by you.")
+            return
+
+        await db.clear_post_pinned_at(post_id)
+
+        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
+        if page is None:
+            await query.edit_message_caption("Schedule not found.")
+            return
+
+        if page.file_id and page.file_media_type:
+            input_media = _to_input_media(
+                file_id=page.file_id,
+                media_type=page.file_media_type,
+                caption=page.text,
+                caption_entities=page.entities,
+            )
+            try:
+                await query.edit_message_media(input_media, reply_markup=page.keyboard)
+            except Exception:
+                pass
+        else:
+            try:
+                await query.edit_message_text(page.text, entities=page.entities, reply_markup=page.keyboard)
+            except Exception:
+                pass
         return
 
     if data.startswith(f"{_CB_ALBUM}:"):
@@ -750,6 +812,222 @@ async def send_queue_browser(
                 )
     else:
         await bot.send_message(chat_id=chat_id, text=page.text, entities=page.entities, reply_markup=page.keyboard)
+
+
+# ---------------------------------------------------------------------------
+# Pin-date conversation
+# ---------------------------------------------------------------------------
+
+_PIN_WAITING_DATE = 0
+_PIN_WAITING_TIME = 1
+
+
+def _parse_date_input(text: str, *, now: _date) -> _date | None:
+    """Parse a date string from the user. Returns None if unparseable.
+
+    Accepted formats: DD/MM/YYYY, DD/MM, DD Mon YYYY, DD Mon (e.g. 25 Dec 2026).
+    When year is omitted, the nearest future occurrence is chosen.
+    """
+    text = text.strip()
+
+    # DD/MM/YYYY
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", text)
+    if m:
+        try:
+            return _date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+        except ValueError:
+            return None
+
+    # DD/MM — infer year
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})", text)
+    if m:
+        day, month = int(m.group(1)), int(m.group(2))
+        for year in (now.year, now.year + 1):
+            try:
+                d = _date(year, month, day)
+                if d >= now:
+                    return d
+            except ValueError:
+                continue
+        return None
+
+    # DD Mon YYYY or DD Mon
+    for fmt in ("%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            pass
+    for fmt in ("%d %b", "%d %B"):
+        try:
+            partial = datetime.strptime(text + " 2000", fmt + " %Y").date()
+        except ValueError:
+            continue
+        for year in (now.year, now.year + 1):
+            d = partial.replace(year=year)
+            if d >= now:
+                return d
+
+    return None
+
+
+def _parse_time_input(text: str) -> tuple[int, int] | None:
+    """Parse HH:MM (or HHMM) from user input. Returns (hour, minute) or None."""
+    text = text.strip()
+    m = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return h, mi
+    m = re.fullmatch(r"(\d{2})(\d{2})", text)
+    if m:
+        h, mi = int(m.group(1)), int(m.group(2))
+        if 0 <= h <= 23 and 0 <= mi <= 59:
+            return h, mi
+    return None
+
+
+async def pin_date_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point: user taps 'Set date' in the queue browser."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return ConversationHandler.END
+
+    await query.answer()
+    data = query.data or ""
+    try:
+        post_id = int(data.split(":")[2])
+    except (IndexError, ValueError):
+        return ConversationHandler.END
+
+    post = await db.get_queued_post_with_owner(post_id)
+    if post is None or int(post["owner_user_id"]) != update.effective_user.id:
+        await query.answer("Post not found or not owned by you.", show_alert=True)
+        return ConversationHandler.END
+
+    user_tz = await db.get_user_timezone(update.effective_user.id) or "UTC"
+    context.user_data["pin_post_id"] = post_id
+    context.user_data["pin_user_tz"] = user_tz
+
+    msg = query.message
+    if msg is None:
+        return ConversationHandler.END
+
+    await context.bot.send_message(
+        chat_id=msg.chat_id,
+        text=(
+            f"Enter the date for this post (your timezone: {user_tz}):\n"
+            "Formats: 25/12/2026 or 25/12 or 25 Dec 2026 or 25 Dec\n"
+            "/cancel to abort."
+        ),
+    )
+    return _PIN_WAITING_DATE
+
+
+async def pin_date_got_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User sent a date string."""
+    if update.message is None or update.effective_user is None:
+        return _PIN_WAITING_DATE
+
+    text = (update.message.text or "").strip()
+    user_tz_name: str = context.user_data.get("pin_user_tz", "UTC")
+    try:
+        tz = ZoneInfo(user_tz_name)
+    except Exception:
+        tz = timezone.utc
+
+    now_local = datetime.now(tz).date()
+    parsed = _parse_date_input(text, now=now_local)
+
+    if parsed is None:
+        await update.message.reply_text(
+            "Could not parse that date.\n"
+            "Try: 25/12/2026 or 25 Dec 2026\n"
+            "/cancel to abort."
+        )
+        return _PIN_WAITING_DATE
+
+    context.user_data["pin_date"] = parsed
+    await update.message.reply_text(
+        f"Date: {parsed.strftime('%d %b %Y')}\n"
+        f"Now enter the time (HH:MM in {user_tz_name}):\n"
+        "/cancel to abort."
+    )
+    return _PIN_WAITING_TIME
+
+
+async def pin_date_got_time(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User sent a time string. Confirm and write pinned_at."""
+    if update.message is None or update.effective_user is None:
+        return _PIN_WAITING_TIME
+
+    text = (update.message.text or "").strip()
+    parsed_time = _parse_time_input(text)
+
+    if parsed_time is None:
+        await update.message.reply_text(
+            "Could not parse that time. Use HH:MM (e.g. 20:00)\n"
+            "/cancel to abort."
+        )
+        return _PIN_WAITING_TIME
+
+    hour, minute = parsed_time
+    pending_date: _date | None = context.user_data.get("pin_date")
+    post_id: int | None = context.user_data.get("pin_post_id")
+    user_tz_name: str = context.user_data.get("pin_user_tz", "UTC")
+
+    if pending_date is None or post_id is None:
+        await update.message.reply_text("Session expired. Please tap 'Set date' again.")
+        return ConversationHandler.END
+
+    try:
+        tz = ZoneInfo(user_tz_name)
+    except Exception:
+        tz = timezone.utc
+
+    local_dt = datetime(pending_date.year, pending_date.month, pending_date.day, hour, minute, tzinfo=tz)
+    utc_dt = local_dt.astimezone(timezone.utc)
+
+    if utc_dt <= datetime.now(timezone.utc):
+        await update.message.reply_text(
+            f"{pending_date.strftime('%d %b %Y')} {hour:02d}:{minute:02d} ({user_tz_name}) is in the past.\n"
+            "Enter the date again:\n"
+            "/cancel to abort."
+        )
+        context.user_data.pop("pin_date", None)
+        return _PIN_WAITING_DATE
+
+    await db.set_post_pinned_at(post_id, utc_dt)
+    context.user_data.pop("pin_post_id", None)
+    context.user_data.pop("pin_date", None)
+    context.user_data.pop("pin_user_tz", None)
+
+    await update.message.reply_text(
+        f"Post pinned to {pending_date.strftime('%d %b %Y')} at {hour:02d}:{minute:02d} ({user_tz_name}).\n"
+        "It will be sent at or shortly after that time, ahead of the regular queue.\n"
+        "Tap 'Clear date' in the queue browser to unpin."
+    )
+    return ConversationHandler.END
+
+
+async def pin_date_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """User cancelled the pin-date flow."""
+    context.user_data.pop("pin_post_id", None)
+    context.user_data.pop("pin_date", None)
+    context.user_data.pop("pin_user_tz", None)
+    if update.message is not None:
+        await update.message.reply_text("Date pinning cancelled.")
+    return ConversationHandler.END
+
+
+pin_date_conversation_handler = ConversationHandler(
+    entry_points=[CallbackQueryHandler(pin_date_start, pattern=r"^qv:pd:")],
+    states={
+        _PIN_WAITING_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pin_date_got_date)],
+        _PIN_WAITING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, pin_date_got_time)],
+    },
+    fallbacks=[CommandHandler("cancel", pin_date_cancel)],
+    per_message=False,
+)
 
 
 def _unused_for_type_checking(_: Any) -> None:

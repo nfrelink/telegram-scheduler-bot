@@ -50,20 +50,24 @@ async def start_scheduler(bot: ExtBot) -> None:
 
 
 async def _get_sleep_seconds(default_seconds: int) -> float:
-    """Choose a sleep interval, respecting upcoming scheduled_for times."""
-    try:
-        earliest_raw = await db.get_earliest_scheduled_for()
-        earliest = parse_timestamp(earliest_raw)
-    except Exception:
-        earliest = None
+    """Choose a sleep interval, respecting upcoming scheduled_for and pinned_at times."""
+    now = datetime.now(timezone.utc)
+    earliest: datetime | None = None
+
+    for getter in (db.get_earliest_scheduled_for, db.get_earliest_pinned_at):
+        try:
+            raw = await getter()
+            dt = parse_timestamp(raw)
+        except Exception:
+            dt = None
+        if dt is not None and (earliest is None or dt < earliest):
+            earliest = dt
 
     if earliest is None:
         return float(default_seconds)
 
-    now = datetime.now(timezone.utc)
     delta = (earliest - now).total_seconds()
     if delta <= 0:
-        # There is at least one due scheduled_for; loop again soon.
         return 1.0
 
     return float(min(default_seconds, max(1.0, delta)))
@@ -180,7 +184,7 @@ async def _process_schedule(
         logger.warning("Paused schedule id=%s due to invalid pattern: %s", schedule_id, reason)
         return
 
-    post = await db.get_next_queued_post(schedule_id)
+    post = await db.get_next_queued_post(schedule_id, now=now)
     if post is None:
         await _handle_empty_queue(
             bot,
@@ -190,22 +194,24 @@ async def _process_schedule(
         return
 
     post_id = int(post["id"])
+    pinned_at = parse_timestamp(post.get("pinned_at"))
     scheduled_for = parse_timestamp(post.get("scheduled_for"))
-    if scheduled_for is not None and scheduled_for > now:
-        return
 
-    last_run_at = parse_timestamp(schedule.get("last_run_at"))
-    created_at = parse_timestamp(schedule.get("created_at"))
-    base_after = last_run_at or created_at or now
-
-    due_by_pattern = False
-    if scheduled_for is None:
+    if pinned_at is not None:
+        # pinned_at <= now is guaranteed by get_next_queued_post — fire immediately.
+        pass
+    elif scheduled_for is not None:
+        # Catch-up or retry post: send only if its scheduled_for has passed.
+        if scheduled_for > now:
+            return
+    else:
+        # Normal FIFO post: send only when the schedule pattern is due.
+        last_run_at = parse_timestamp(schedule.get("last_run_at"))
+        created_at = parse_timestamp(schedule.get("created_at"))
+        base_after = last_run_at or created_at or now
         next_run = calculate_next_run(schedule, after=base_after)
-        due_by_pattern = now >= next_run
-
-    due = (scheduled_for is not None and scheduled_for <= now) or due_by_pattern
-    if not due:
-        return
+        if now < next_run:
+            return
 
     await rate_limiter.wait_if_needed(telegram_channel_id)
     ok = await send_post(bot, telegram_channel_id=telegram_channel_id, post=post)

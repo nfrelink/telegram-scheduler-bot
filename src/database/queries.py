@@ -627,18 +627,31 @@ async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -
     return len(posts)
 
 
-async def get_next_queued_post(schedule_id: int) -> dict[str, Any] | None:
-    """Get next post from queue (lowest position)."""
+async def get_next_queued_post(schedule_id: int, *, now: datetime) -> dict[str, Any] | None:
+    """Get the next post to send for a schedule.
+
+    Two-tier priority:
+    1. Pinned posts whose pinned_at <= now, ordered by pinned_at (earliest first).
+    2. Normal FIFO posts (pinned_at IS NULL), ordered by position.
+
+    Pinned posts whose time has not yet come are excluded entirely; they do not
+    block FIFO delivery of posts behind them.
+    """
+    now_str = to_sqlite_timestamp(now)
     async with get_db() as db:
         cursor = await db.execute(
             """
             SELECT *
             FROM queued_posts
             WHERE schedule_id = ?
-            ORDER BY position ASC
+              AND (pinned_at IS NULL OR pinned_at <= ?)
+            ORDER BY
+              CASE WHEN pinned_at IS NOT NULL THEN 0 ELSE 1 END,
+              pinned_at ASC,
+              position ASC
             LIMIT 1
             """,
-            (schedule_id,),
+            (schedule_id, now_str),
         )
         row = await cursor.fetchone()
         return _row_to_dict(row)
@@ -662,13 +675,17 @@ async def get_queued_posts(schedule_id: int, *, limit: int = 10, offset: int = 0
 
 
 async def get_queued_posts_unscheduled(schedule_id: int, *, limit: int) -> list[dict[str, Any]]:
-    """Get queued posts that do not have scheduled_for set, in FIFO order."""
+    """Get queued posts that do not have scheduled_for set, in FIFO order.
+
+    Excludes pinned posts (pinned_at IS NOT NULL) since they manage their own
+    send timing and must not be given a catch-up scheduled_for value.
+    """
     async with get_db() as db:
         cursor = await db.execute(
             """
             SELECT *
             FROM queued_posts
-            WHERE schedule_id = ? AND scheduled_for IS NULL
+            WHERE schedule_id = ? AND scheduled_for IS NULL AND pinned_at IS NULL
             ORDER BY position ASC
             LIMIT ?
             """,
@@ -789,6 +806,34 @@ async def get_earliest_scheduled_for() -> Any:
         )
         row = await cursor.fetchone()
         return row[0] if row else None  # type: ignore[index]
+
+
+async def get_earliest_pinned_at() -> Any:
+    """Get the earliest future pinned_at value across all queued posts (or None)."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT MIN(pinned_at) FROM queued_posts WHERE pinned_at IS NOT NULL"
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None  # type: ignore[index]
+
+
+async def set_post_pinned_at(post_id: int, pinned_at: datetime) -> None:
+    """Pin a queued post to a specific send datetime."""
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE queued_posts SET pinned_at = ? WHERE id = ?",
+            (to_sqlite_timestamp(pinned_at), post_id),
+        )
+
+
+async def clear_post_pinned_at(post_id: int) -> None:
+    """Remove the pinned_at datetime from a queued post, returning it to FIFO."""
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE queued_posts SET pinned_at = NULL WHERE id = ?",
+            (post_id,),
+        )
 
 
 # --- Verification codes ------------------------------------------------------

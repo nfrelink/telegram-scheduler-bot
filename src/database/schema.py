@@ -180,6 +180,10 @@ async def _apply_migrations(db) -> None:  # type: ignore[no-untyped-def]
                 ("queued_posts", "forward_origin_message_id", "INTEGER"),
             ],
         ),
+        (
+            "20260316_add_queued_posts_pinned_at",
+            [("queued_posts", "pinned_at", "TIMESTAMP")],
+        ),
     ]
 
     applied = await _get_applied_migrations(db)

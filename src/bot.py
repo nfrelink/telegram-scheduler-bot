@@ -14,7 +14,13 @@ from handlers.channel_info import channelid_command
 from handlers.channel_management import list_channels_command, remove_channel_command
 from handlers.bulk_upload import bulk_upload_conversation_handler
 from handlers.forwarding import addforward_command, clearforward_command, forwarding_command, removeforward_command
-from handlers.queue_management import delete_post_command, queue_browser_callback, test_schedule_command, view_queue_command
+from handlers.queue_management import (
+    delete_post_command,
+    pin_date_conversation_handler,
+    queue_browser_callback,
+    test_schedule_command,
+    view_queue_command,
+)
 from handlers.schedule_management import (
     copy_schedule_command,
     delete_schedule_command,
@@ -124,10 +130,13 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("copyschedule", copy_schedule_command))
     application.add_handler(CommandHandler("setscheduletimezone", setscheduletimezone_command))
 
-    # Queue management (Phase 3)
+    # Queue management (Phase 3 / Phase 7)
     application.add_handler(CommandHandler("viewqueue", view_queue_command))
     application.add_handler(CommandHandler("deletepost", delete_post_command))
     application.add_handler(CommandHandler("testschedule", test_schedule_command))
+    # Pin-date conversation must be registered before the general qv: handler
+    # so its qv:pd:* entry point takes priority.
+    application.add_handler(pin_date_conversation_handler)
     application.add_handler(CallbackQueryHandler(queue_browser_callback, pattern=r"^qv:"))
     application.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^mn:"))
 
