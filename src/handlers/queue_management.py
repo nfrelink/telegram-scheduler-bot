@@ -629,6 +629,43 @@ async def test_schedule_command(update: Update, context: ContextTypes.DEFAULT_TY
     await update.message.reply_text(text, entities=entities)
 
 
+async def send_queue_browser(
+    *,
+    user_id: int,
+    schedule_id: int,
+    chat_id: int,
+    bot: Any,
+) -> None:
+    """Send a fresh queue browser message for a schedule to the given chat.
+
+    Used by the menu system to open the queue browser without editing the menu message.
+    """
+    page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=0)
+    if page is None:
+        await bot.send_message(chat_id=chat_id, text="Schedule not found or not owned by you.")
+        return
+
+    if page.file_id and page.file_media_type:
+        match page.file_media_type:
+            case "photo":
+                await bot.send_photo(
+                    chat_id, photo=page.file_id, caption=page.text,
+                    caption_entities=page.entities, reply_markup=page.keyboard,
+                )
+            case "video":
+                await bot.send_video(
+                    chat_id, video=page.file_id, caption=page.text,
+                    caption_entities=page.entities, reply_markup=page.keyboard,
+                )
+            case _:
+                await bot.send_document(
+                    chat_id, document=page.file_id, caption=page.text,
+                    caption_entities=page.entities, reply_markup=page.keyboard,
+                )
+    else:
+        await bot.send_message(chat_id=chat_id, text=page.text, entities=page.entities, reply_markup=page.keyboard)
+
+
 def _unused_for_type_checking(_: Any) -> None:
     # Avoid unused import warnings when type checkers are enabled.
     return

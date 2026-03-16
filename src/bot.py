@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import os
 
+import re
+
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from handlers.admin import broadcast_command, debug_command, stats_command
@@ -29,6 +31,7 @@ from handlers.selection import (
     selectschedule_command,
     selection_command,
 )
+from handlers.menu import menu_callback, menu_command
 from handlers.timezone_management import gettimezone_command, settimezone_command
 from handlers.user_commands import help_command, start_command
 from handlers.verification import add_channel_command, channel_post_handler
@@ -76,6 +79,10 @@ def create_application() -> Application:
     # Core user commands
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("menu", menu_command))
+    application.add_handler(
+        MessageHandler(filters.Regex(re.compile(r"^Menu$")) & filters.ChatType.PRIVATE, menu_command)
+    )
     application.add_handler(CommandHandler("gettimezone", gettimezone_command))
     application.add_handler(CommandHandler("settimezone", settimezone_command))
 
@@ -115,6 +122,7 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("deletepost", delete_post_command))
     application.add_handler(CommandHandler("testschedule", test_schedule_command))
     application.add_handler(CallbackQueryHandler(queue_browser_callback, pattern=r"^qv:"))
+    application.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^mn:"))
 
     # Channel posts: verification code detection
     application.add_handler(

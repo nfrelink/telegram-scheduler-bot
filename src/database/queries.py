@@ -678,6 +678,22 @@ async def get_queued_posts_unscheduled(schedule_id: int, *, limit: int) -> list[
         return [dict(r) for r in rows]
 
 
+async def get_channel_queue_count(channel_db_id: int) -> int:
+    """Count total queued posts across all schedules for a channel."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT COUNT(*)
+            FROM queued_posts qp
+            JOIN schedules s ON qp.schedule_id = s.id
+            WHERE s.channel_id = ?
+            """,
+            (channel_db_id,),
+        )
+        row = await cursor.fetchone()
+        return int(row[0])  # type: ignore[index]
+
+
 async def get_queue_count(schedule_id: int) -> int:
     """Count posts in a schedule queue."""
     async with get_db() as db:

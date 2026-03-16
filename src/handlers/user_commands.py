@@ -9,6 +9,7 @@ from telegram.ext import ContextTypes
 
 from database import queries as db
 from .common import ensure_user_record
+from .menu import PERSISTENT_KEYBOARD
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             segments += [Segment("\n"), *selection_segments(details)]
 
         text, entities = render(segments)
-        await update.message.reply_text(text, entities=entities)
+        await update.message.reply_text(text, entities=entities, reply_markup=PERSISTENT_KEYBOARD)
         user_id = update.effective_user.id if update.effective_user else None
         logger.info("Handled /start for user_id=%s", user_id)
     except Exception as e:
