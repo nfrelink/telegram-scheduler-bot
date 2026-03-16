@@ -376,7 +376,11 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(f"Schedule pattern invalid: {reason}")
         return ConversationHandler.END
 
-    channel_db_id = int(context.user_data.get("ns_channel_db_id"))
+    _raw_channel_id = context.user_data.get("ns_channel_db_id")
+    if _raw_channel_id is None:
+        await update.message.reply_text("Session expired. Please start over with /newschedule.")
+        return ConversationHandler.END
+    channel_db_id = int(_raw_channel_id)
     name = str(context.user_data.get("ns_name"))
     timezone_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
 
@@ -742,6 +746,14 @@ async def resume_schedule_command(update: Update, context: ContextTypes.DEFAULT_
             selected_schedule_id=schedule_id,
         )
 
+    queue_count = await db.get_queue_count(schedule_id)
+    if queue_count == 0:
+        await update.message.reply_text(
+            "The queue for this schedule is empty — upload some posts with /bulk first, "
+            "then resume."
+        )
+        return
+
     await db.update_schedule_state(schedule_id, "active")
     details = await db.get_user_context_details(update.effective_user.id)
     text, entities = render(
@@ -943,7 +955,11 @@ async def editschedule_set_name(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Name cannot be empty. Enter a name.")
         return ES_WAIT_NAME
 
-    schedule_id = int(context.user_data.get("es_schedule_id"))
+    _raw_schedule_id = context.user_data.get("es_schedule_id")
+    if _raw_schedule_id is None:
+        await update.message.reply_text("Session expired. Please start over with /editschedule.")
+        return ConversationHandler.END
+    schedule_id = int(_raw_schedule_id)
     await db.update_schedule_name(schedule_id, name=name)
     text, entities = render([Segment("Schedule "), Segment(str(schedule_id), code=True), Segment(" renamed.")])
     await update.message.reply_text(text, entities=entities)
@@ -1073,7 +1089,11 @@ async def _editschedule_finalize(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"Schedule pattern invalid: {reason}")
         return ConversationHandler.END
 
-    schedule_id = int(context.user_data.get("es_schedule_id"))
+    _raw_schedule_id = context.user_data.get("es_schedule_id")
+    if _raw_schedule_id is None:
+        await update.message.reply_text("Session expired. Please start over with /editschedule.")
+        return ConversationHandler.END
+    schedule_id = int(_raw_schedule_id)
     await db.update_schedule_pattern(schedule_id, pattern)
 
     tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())

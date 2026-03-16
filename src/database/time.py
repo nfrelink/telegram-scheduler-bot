@@ -7,6 +7,7 @@ format used by SQLite's CURRENT_TIMESTAMP: "YYYY-MM-DD HH:MM:SS".
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 SQLITE_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
@@ -21,4 +22,27 @@ def to_sqlite_timestamp(dt: datetime) -> str:
     # SQLite CURRENT_TIMESTAMP has second precision and no timezone suffix.
     dt = dt.replace(microsecond=0, tzinfo=None)
     return dt.strftime(SQLITE_TIMESTAMP_FORMAT)
+
+
+def parse_timestamp(value: Any) -> datetime | None:
+    """Parse a SQLite timestamp string or datetime into a UTC-aware datetime.
+
+    Returns None for null/missing values or unparseable strings.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        dt = value
+    elif isinstance(value, str):
+        try:
+            dt = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    else:
+        return None
+
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
 

@@ -12,9 +12,9 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from database import queries as db
+from database.time import parse_timestamp
 from handlers.common import ensure_user_record
 from handlers.selection import selection_segments
-from scheduler.engine import _parse_timestamp  # reuse parsing helper (internal)
 from scheduler.timing import calculate_next_run
 from utils.tg_text import Segment, render
 
@@ -122,7 +122,7 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         media_type = p.get("media_type")
         retry_count = p.get("retry_count", 0)
 
-        scheduled_for = _parse_timestamp(p.get("scheduled_for"))
+        scheduled_for = parse_timestamp(p.get("scheduled_for"))
         planned_time = scheduled_for or cursor_time
         cursor_time = calculate_next_run(schedule, after=planned_time)
 

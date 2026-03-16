@@ -6,11 +6,11 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Any
 
 from telegram.ext import ExtBot
 
 from database import queries as db
+from database.time import parse_timestamp
 from scheduler.executor import send_post
 from scheduler.rate_limiter import RateLimiter
 from scheduler.timing import calculate_next_run, validate_schedule_pattern
@@ -23,25 +23,6 @@ MAX_RETRIES = 3
 CATCHUP_SPACING_SECONDS = 10
 CATCHUP_MAX_RUNS_PER_SCHEDULE = 20
 CATCHUP_MAX_ITERATIONS = 5000
-
-def _parse_timestamp(value: Any) -> datetime | None:
-    if value is None:
-        return None
-
-    if isinstance(value, datetime):
-        dt = value
-    elif isinstance(value, str):
-        # SQLite CURRENT_TIMESTAMP -> "YYYY-MM-DD HH:MM:SS"
-        try:
-            dt = datetime.fromisoformat(value)
-        except ValueError:
-            return None
-    else:
-        return None
-
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 async def start_scheduler(bot: ExtBot) -> None:
@@ -72,7 +53,7 @@ async def _get_sleep_seconds(default_seconds: int) -> float:
     """Choose a sleep interval, respecting upcoming scheduled_for times."""
     try:
         earliest_raw = await db.get_earliest_scheduled_for()
-        earliest = _parse_timestamp(earliest_raw)
+        earliest = parse_timestamp(earliest_raw)
     except Exception:
         earliest = None
 
@@ -102,8 +83,8 @@ async def _catch_up_missed_posts() -> None:
     for schedule in schedules:
         schedule_id = int(schedule["id"])
         try:
-            last_run_at = _parse_timestamp(schedule.get("last_run_at"))
-            created_at = _parse_timestamp(schedule.get("created_at"))
+            last_run_at = parse_timestamp(schedule.get("last_run_at"))
+            created_at = parse_timestamp(schedule.get("created_at"))
             base_after = last_run_at or created_at
             if base_after is None:
                 continue
@@ -209,12 +190,12 @@ async def _process_schedule(
         return
 
     post_id = int(post["id"])
-    scheduled_for = _parse_timestamp(post.get("scheduled_for"))
+    scheduled_for = parse_timestamp(post.get("scheduled_for"))
     if scheduled_for is not None and scheduled_for > now:
         return
 
-    last_run_at = _parse_timestamp(schedule.get("last_run_at"))
-    created_at = _parse_timestamp(schedule.get("created_at"))
+    last_run_at = parse_timestamp(schedule.get("last_run_at"))
+    created_at = parse_timestamp(schedule.get("created_at"))
     base_after = last_run_at or created_at or now
 
     due_by_pattern = False

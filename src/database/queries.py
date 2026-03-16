@@ -49,7 +49,8 @@ async def upsert_user(
         cursor = await db.execute("SELECT * FROM users WHERE id = ?", (user_id,))
         row = await cursor.fetchone()
         user = _row_to_dict(row)
-        assert user is not None
+        if user is None:
+            raise RuntimeError(f"upsert_user: SELECT after UPSERT returned no row for user_id={user_id}")
         return user
 
 

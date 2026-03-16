@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 import os
 import time
@@ -101,6 +102,7 @@ def _is_admin(update: Update) -> bool:
 
 
 def admin_only(func):  # type: ignore[no-untyped-def]
+    @functools.wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ensure_user_record(update, context)
         if update.message is None:
