@@ -818,6 +818,7 @@ _MSG_HANDLER = filters.TEXT & ~filters.COMMAND
 
 schedules_conversation_handler = ConversationHandler(
     entry_points=[CommandHandler("schedules", schedules_command)],
+    allow_reentry=True,
     states={
         SM_SHOWING: [CallbackQueryHandler(schedules_callback, pattern=r"^sm:")],
         SM_WAIT_TZ_INPUT: [MessageHandler(_MSG_HANDLER, schedules_tz_handler)],

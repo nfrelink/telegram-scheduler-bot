@@ -275,6 +275,7 @@ async def channels_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 channels_conversation_handler = ConversationHandler(
     entry_points=[CommandHandler("channels", channels_command)],
+    allow_reentry=True,
     states={
         _SHOWING: [CallbackQueryHandler(channels_callback, pattern=r"^ch:")],
         _AWAITING_ADD: [

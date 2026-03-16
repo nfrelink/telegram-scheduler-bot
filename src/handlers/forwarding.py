@@ -213,6 +213,7 @@ async def forward_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 forward_conversation_handler = ConversationHandler(
     entry_points=[CommandHandler("forward", forward_command)],
+    allow_reentry=True,
     states={
         _SHOWING: [CallbackQueryHandler(forward_callback, pattern=r"^fw:")],
         _AWAITING_ADD: [
