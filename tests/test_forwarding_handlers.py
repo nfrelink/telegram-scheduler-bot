@@ -116,6 +116,31 @@ async def test_list_with_entries(initialized_db) -> None:
     assert "fw:clear" in all_data
 
 
+@pytest.mark.asyncio
+async def test_list_shows_stored_name(initialized_db) -> None:
+    """When a name is stored the button label shows the name, not the raw ID."""
+    user_id = 6012
+    await _setup_user(user_id)
+    await db.add_forward_origin_allowlist(
+        user_id=user_id, origin_chat_id=-100333, origin_channel_name="Friend Channel"
+    )
+    _, keyboard = await _list_text_and_keyboard(user_id)
+    labels = [b.text for row in keyboard.inline_keyboard for b in row]
+    assert "Friend Channel" in labels
+    assert "-100333" not in labels
+
+
+@pytest.mark.asyncio
+async def test_list_falls_back_to_id_when_no_name(initialized_db) -> None:
+    """Without a stored name the button falls back to the raw numeric ID."""
+    user_id = 6013
+    await _setup_user(user_id)
+    await db.add_forward_origin_allowlist(user_id=user_id, origin_chat_id=-100444)
+    _, keyboard = await _list_text_and_keyboard(user_id)
+    labels = [b.text for row in keyboard.inline_keyboard for b in row]
+    assert "-100444" in labels
+
+
 # ---------------------------------------------------------------------------
 # forward_command
 # ---------------------------------------------------------------------------
@@ -229,6 +254,7 @@ async def test_forward_add_handler_text_channel_id(initialized_db) -> None:
     msg = _FakeMessage(text="-100321")
     update = _FakeUpdate(message=msg, effective_user=_FakeUser(id=user_id))
     ctx = _FakeContext()
+    ctx.bot.get_chat = AsyncMock(side_effect=Exception("unavailable"))
 
     from telegram.ext import ConversationHandler
     result = await forward_add_handler(update, ctx)  # type: ignore[arg-type]
@@ -257,6 +283,7 @@ async def test_forward_add_handler_forwarded_message(initialized_db) -> None:
 
     class _FakeForwardChat:
         id = -100654
+        title = "Some Friend Channel"
 
     msg = _FakeMessage()
     msg.forward_from_chat = _FakeForwardChat()
@@ -266,3 +293,47 @@ async def test_forward_add_handler_forwarded_message(initialized_db) -> None:
     result = await forward_add_handler(update, _FakeContext())  # type: ignore[arg-type]
     assert result == ConversationHandler.END
     assert -100654 in await db.get_forward_origin_allowlist(user_id)
+    with_names = await db.get_forward_origin_allowlist_with_names(user_id)
+    assert any(cid == -100654 and name == "Some Friend Channel" for cid, name in with_names)
+
+
+@pytest.mark.asyncio
+async def test_forward_add_handler_text_id_stores_name_from_get_chat(initialized_db) -> None:
+    """When the user types a numeric ID, get_chat() is called and the title is stored."""
+    user_id = 6014
+    await _setup_user(user_id)
+
+    class _FakeChat:
+        title = "Resolved Channel"
+
+    ctx = _FakeContext()
+    ctx.bot.get_chat = AsyncMock(return_value=_FakeChat())
+
+    msg = _FakeMessage(text="-100789")
+    update = _FakeUpdate(message=msg, effective_user=_FakeUser(id=user_id))
+
+    from telegram.ext import ConversationHandler
+    result = await forward_add_handler(update, ctx)  # type: ignore[arg-type]
+    assert result == ConversationHandler.END
+    with_names = await db.get_forward_origin_allowlist_with_names(user_id)
+    assert any(cid == -100789 and name == "Resolved Channel" for cid, name in with_names)
+
+
+@pytest.mark.asyncio
+async def test_forward_add_handler_text_id_falls_back_on_get_chat_failure(initialized_db) -> None:
+    """If get_chat() fails (private channel the bot can't see), entry is still stored."""
+    user_id = 6015
+    await _setup_user(user_id)
+
+    ctx = _FakeContext()
+    ctx.bot.get_chat = AsyncMock(side_effect=Exception("Forbidden"))
+
+    msg = _FakeMessage(text="-100999")
+    update = _FakeUpdate(message=msg, effective_user=_FakeUser(id=user_id))
+
+    from telegram.ext import ConversationHandler
+    result = await forward_add_handler(update, ctx)  # type: ignore[arg-type]
+    assert result == ConversationHandler.END
+    assert -100999 in await db.get_forward_origin_allowlist(user_id)
+    with_names = await db.get_forward_origin_allowlist_with_names(user_id)
+    assert any(cid == -100999 and name is None for cid, name in with_names)
