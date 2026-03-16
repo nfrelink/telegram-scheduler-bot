@@ -24,8 +24,6 @@ A Telegram bot for scheduling posts to multiple channels with flexible schedulin
 
 ### Setup
 
-Note: all schedule times you enter are interpreted as UTC (not your local timezone).
-
 1. **Clone the repository**
    ```bash
    git clone https://github.com/nfrelink/telegram-scheduler-bot
@@ -66,69 +64,57 @@ Note: all schedule times you enter are interpreted as UTC (not your local timezo
 
 ## Usage
 
-### Adding a Channel (verification)
+Everything is wizard-driven. Send a command and follow the inline buttons or prompts — no need to memorise IDs or syntax.
 
-1. Add the bot to your channel as an administrator (with permission to post messages)
-2. In the channel, post `/channelid` to show the numeric channel ID
-3. In private chat with the bot: `/addchannel <channel_id>`
-4. Post the verification code to the channel
-5. The bot detects the code and completes verification
+### Adding a Channel
 
-### Selecting defaults (recommended)
+1. Add the bot to your channel as an administrator (posting permission required)
+2. Send `/channels` in your private chat with the bot, then tap **Add channel**
+3. Either forward any message from the channel here, or type its numeric ID or `@handle`
+4. Post the one-time verification code the bot gives you to the channel
+5. The bot detects the code, completes verification, and deletes the code post
 
-If you select a channel and schedule once, many commands work without explicit IDs.
+### Setting Your Timezone
 
-- `/selectchannel <channel_id>`
-- `/listschedules` then `/selectschedule <schedule_id>`
-- `/selection` shows what is currently selected
-- `/clearselection` clears selection
+Schedule times (daily/weekly) are stored in your configured timezone.
 
-### Creating a Schedule
+- `/timezone` — guided region picker
+- `/settimezone Europe/Amsterdam` — set directly by IANA name
+- `/gettimezone` — show your current timezone
 
-Run `/newschedule` (uses selected channel) or `/newschedule <channel_id>`.
+### Selecting Defaults (recommended)
+
+Pick a default channel + schedule once so that `/bulk` and `/queue` work without extra arguments.
+
+- `/select` — interactive channel → schedule picker
+
+### Managing Schedules
+
+- `/schedules` — list schedules for the selected channel; tap **New**, **Edit**, **Pause/Resume**, or **Delete**
+- Three schedule types: **interval** (e.g. every 2 hours), **daily** (times of day), **weekly** (days × times)
 
 ### Bulk Upload
 
-Run `/bulk` (uses selected schedule) or `/bulk <schedule_id>`, then follow the prompts.
+- `/bulk` — queue many posts at once; choose a caption mode, send media, then `/done`
+- Supports photos, videos, and documents; albums are detected automatically
+- Messages forwarded from channels in your `/forward` allowlist are re-sent as native Telegram forwards
 
-### Common Commands
+### Queue Management
 
-- `/listchannels`
-- `/listschedules [channel_id]`
-- `/viewqueue [schedule_id] [count]`
-- `/pauseschedule [schedule_id]`
-- `/resumeschedule [schedule_id]`
-- `/deletepost <post_id>`
-- `/testschedule [schedule_id] [run_count]`
+- `/queue` — paginated queue browser with inline navigation
+- `/deletepost <post_id>` — remove a single queued post
 
-## Schedule Examples
+### Forwarding Allowlist
 
-Note: schedule times are interpreted as UTC (not your local timezone).
+- `/forward` — manage the list of channels whose forwarded posts are passed through as native Telegram forwards during bulk upload
 
-### Post every hour
-```json
-{
-  "type": "interval",
-  "hours": 1
-}
-```
+### Admin Commands
 
-### Post daily at 9 AM and 4 PM
-```json
-{
-  "type": "daily",
-  "times": ["09:00", "16:00"]
-}
-```
+Restricted to the `ADMIN_USER_ID` configured in `.env`.
 
-### Post Monday-Friday at noon
-```json
-{
-  "type": "weekly",
-  "days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
-  "times": ["12:00"]
-}
-```
+- `/debug` — uptime, DB path, live counts
+- `/stats` — delivery stats (today and last 7 days)
+- `/broadcast <message>` — send a message to all users active in the last 90 days
 
 ## Development
 
