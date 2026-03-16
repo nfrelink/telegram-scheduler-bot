@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS user_context (
 CREATE TABLE IF NOT EXISTS forward_origin_allowlist (
     user_id INTEGER NOT NULL,
     origin_chat_id INTEGER NOT NULL,
+    origin_channel_name TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (user_id, origin_chat_id),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -183,6 +184,10 @@ async def _apply_migrations(db) -> None:  # type: ignore[no-untyped-def]
         (
             "20260316_add_queued_posts_pinned_at",
             [("queued_posts", "pinned_at", "TIMESTAMP")],
+        ),
+        (
+            "20260316_add_forward_origin_allowlist_channel_name",
+            [("forward_origin_allowlist", "origin_channel_name", "TEXT")],
         ),
     ]
 

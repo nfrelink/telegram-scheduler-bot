@@ -30,7 +30,7 @@ _AWAITING_ADD = 1
 
 async def _list_text_and_keyboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     """Build the allowlist display text and inline keyboard."""
-    origins = await db.get_forward_origin_allowlist(user_id)
+    origins = await db.get_forward_origin_allowlist_with_names(user_id)
     if not origins:
         text = (
             "Forwarding allowlist is empty.\n\n"
@@ -41,20 +41,11 @@ async def _list_text_and_keyboard(user_id: int) -> tuple[str, InlineKeyboardMark
             [InlineKeyboardButton("Add channel", callback_data="fw:add")],
         ])
     else:
-        # Build a name lookup from the user's verified channels so we can show
-        # a friendly label instead of a raw numeric channel ID.
-        verified = await db.get_user_channels(user_id)
-        name_by_id: dict[str, str] = {
-            str(ch.get("channel_id") or ""): str(ch.get("channel_name") or "")
-            for ch in verified
-            if ch.get("channel_id") and ch.get("channel_name")
-        }
-
         n = len(origins)
         text = f"Forwarding allowlist — {n} channel{'s' if n > 1 else ''}:"
         rows: list[list[InlineKeyboardButton]] = []
-        for cid in origins:
-            label = name_by_id.get(str(cid)) or str(cid)
+        for cid, name in origins:
+            label = name or str(cid)
             rows.append([
                 InlineKeyboardButton(label, callback_data="fw:noop"),
                 InlineKeyboardButton("Remove", callback_data=f"fw:rm:{cid}"),
@@ -158,21 +149,30 @@ async def forward_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     user_id = update.effective_user.id
     channel_id: int | None = None
+    channel_name: str | None = None
 
     # Detect channel from a forwarded message (v6 and v7 PTB forward_origin).
     if getattr(msg, "forward_from_chat", None) is not None:
         channel_id = msg.forward_from_chat.id
+        channel_name = getattr(msg.forward_from_chat, "title", None) or None
     else:
         origin = getattr(msg, "forward_origin", None)
         if origin is not None and getattr(origin, "chat", None) is not None:
             channel_id = origin.chat.id
+            channel_name = getattr(origin.chat, "title", None) or None
 
-    # Fall back to parsing the text as a channel ID.
+    # Fall back to parsing the text as a channel ID, then try get_chat().
     if channel_id is None and msg.text:
         try:
             channel_id = int(msg.text.strip())
         except ValueError:
             pass
+        if channel_id is not None:
+            try:
+                chat = await context.bot.get_chat(channel_id)
+                channel_name = getattr(chat, "title", None) or None
+            except Exception:
+                pass
 
     if channel_id is None:
         await msg.reply_text(
@@ -181,8 +181,10 @@ async def forward_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return _AWAITING_ADD
 
-    await db.add_forward_origin_allowlist(user_id=user_id, origin_chat_id=channel_id)
-    logger.info("User %s added forward origin %s", user_id, channel_id)
+    await db.add_forward_origin_allowlist(
+        user_id=user_id, origin_chat_id=channel_id, origin_channel_name=channel_name
+    )
+    logger.info("User %s added forward origin %s (%s)", user_id, channel_id, channel_name)
 
     text, keyboard = await _list_text_and_keyboard(user_id)
     fw_msg_id = context.user_data.get("fw_msg_id")

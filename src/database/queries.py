@@ -213,16 +213,35 @@ async def get_forward_origin_allowlist(user_id: int) -> list[int]:
         return [int(r[0]) for r in rows]  # type: ignore[index]
 
 
-async def add_forward_origin_allowlist(*, user_id: int, origin_chat_id: int) -> None:
+async def get_forward_origin_allowlist_with_names(user_id: int) -> list[tuple[int, str | None]]:
+    """Get origin chat IDs with their stored channel names for display."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT origin_chat_id, origin_channel_name
+            FROM forward_origin_allowlist
+            WHERE user_id = ?
+            ORDER BY origin_chat_id ASC
+            """,
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return [(int(r[0]), str(r[1]) if r[1] else None) for r in rows]  # type: ignore[index]
+
+
+async def add_forward_origin_allowlist(
+    *, user_id: int, origin_chat_id: int, origin_channel_name: str | None = None
+) -> None:
     """Add an origin chat ID to a user's forwarding allowlist."""
     async with transaction() as db:
         await db.execute(
             """
-            INSERT INTO forward_origin_allowlist (user_id, origin_chat_id)
-            VALUES (?, ?)
-            ON CONFLICT(user_id, origin_chat_id) DO NOTHING
+            INSERT INTO forward_origin_allowlist (user_id, origin_chat_id, origin_channel_name)
+            VALUES (?, ?, ?)
+            ON CONFLICT(user_id, origin_chat_id) DO UPDATE SET
+                origin_channel_name = COALESCE(excluded.origin_channel_name, origin_channel_name)
             """,
-            (user_id, origin_chat_id),
+            (user_id, origin_chat_id, origin_channel_name),
         )
 
 
