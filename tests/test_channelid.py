@@ -45,5 +45,5 @@ async def test_channelid_posts_channel_id_to_channel() -> None:
     sent = bot.sent[0]
     assert sent["chat_id"] == -100123
     assert "-100123" in sent["text"]
-    assert "/addchannel" in sent["text"]
+    assert "/channels" in sent["text"]
 

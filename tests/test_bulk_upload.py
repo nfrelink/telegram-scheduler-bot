@@ -156,6 +156,51 @@ def test_message_to_collected_item_allowlisted_forward_recorded_in_remove_mode()
     assert item.forward_from_message_id == 77
     assert item.forward_origin_chat_id == -1001111111111
     assert item.forward_origin_message_id == 42
+    # Phase 8a: raw_origin_is_forwarded must be True for any forward.
+    assert item.raw_origin_is_forwarded is True
+
+
+def test_message_to_collected_item_person_forward_sets_raw_origin_is_forwarded() -> None:
+    """Phase 8a: messages forwarded from a person (not a channel) set
+    raw_origin_is_forwarded=True so the album-split prompt triggers."""
+    msg = _FakeMessage()
+    msg.photo = [_FakePhoto("photo_fid2")]
+    msg.caption = None
+
+    class _FakeUser:  # noqa: F811
+        id: int = 54321
+        first_name: str = "Friend"
+
+    msg.forward_from = _FakeUser()  # person forward — no forward_from_chat
+
+    item = bulk_upload._message_to_collected_item(  # type: ignore[attr-defined]
+        msg,
+        caption_mode="remove",
+        single_caption=None,
+        single_caption_entities=None,
+        forward_origin_allowlist=set(),
+    )
+    assert item is not None
+    assert item.raw_origin_is_forwarded is True
+    # No channel origin — allowlist cannot suppress this.
+    assert item.raw_origin_chat_id is None
+
+
+def test_message_to_collected_item_local_upload_raw_origin_is_forwarded_false() -> None:
+    """Phase 8a: locally uploaded media sets raw_origin_is_forwarded=False."""
+    msg = _FakeMessage()
+    msg.photo = [_FakePhoto("photo_local")]
+
+    item = bulk_upload._message_to_collected_item(  # type: ignore[attr-defined]
+        msg,
+        caption_mode="remove",
+        single_caption=None,
+        single_caption_entities=None,
+        forward_origin_allowlist=set(),
+    )
+    assert item is not None
+    assert item.raw_origin_is_forwarded is False
+    assert item.raw_origin_chat_id is None
 
 
 @pytest.mark.asyncio
