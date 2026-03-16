@@ -1,23 +1,25 @@
 """Persistent per-user selection context (channel/schedule).
 
-This helps avoid repeatedly copying IDs, and allows commands to default to the
-currently selected channel/schedule.
+/select presents an inline keyboard: pick a channel, then a schedule.
+The current selection is stored in the users table and shown in confirmations.
 """
 
 from __future__ import annotations
 
 import logging
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from database import access as db_access
 from database import queries as db
 from handlers.common import ensure_user_record
-from handlers.verification import resolve_channel_id
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
+
+_CB_BACK = "sc:back"
+_CB_CHANNEL = "sc:ch:"   # + channel_db_id
+_CB_SET = "sc:set:"      # + channel_db_id:schedule_id
 
 
 def selection_segments(details: dict) -> list[Segment]:
@@ -55,101 +57,116 @@ def selection_segments(details: dict) -> list[Segment]:
     return segments
 
 
-async def _selection_summary_for_user(user_id: int) -> tuple[str, object | None]:
-    details = await db.get_user_context_details(user_id)
-    segments = selection_segments(details)
-    text, entities = render(segments)
-    return text, entities
+async def _channels_keyboard(user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
+    """Build the top-level channel list keyboard."""
+    channels = await db.get_user_channels(user_id)
+    if not channels:
+        return "You have no verified channels. Use /channels to add one.", None
+
+    rows = []
+    for ch in channels:
+        ch_id = int(ch["id"])
+        name = str(ch.get("channel_name") or ch.get("telegram_channel_id") or f"Channel {ch_id}")
+        count = await db.get_channel_queue_count(ch_id)
+        label = f"{name}  ({count} queued)" if count else name
+        rows.append([InlineKeyboardButton(label, callback_data=f"{_CB_CHANNEL}{ch_id}")])
+
+    return "Select a channel:", InlineKeyboardMarkup(rows)
 
 
-async def selection_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show current selection."""
+async def _schedules_keyboard(channel_db_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
+    """Build the schedule list keyboard for a given channel."""
+    schedules = await db.get_channel_schedules(channel_db_id)
+    if not schedules:
+        return "This channel has no schedules yet.", None
+
+    _state_label = {"active": "active", "paused": "paused", "empty_paused": "empty"}
+    rows = []
+    for s in schedules:
+        s_id = int(s["id"])
+        name = str(s.get("name") or f"Schedule {s_id}")
+        state = _state_label.get(str(s.get("state") or ""), str(s.get("state") or ""))
+        count = await db.get_queue_count(s_id)
+        label = f"{name}  •  {state}  •  {count} queued"
+        rows.append([InlineKeyboardButton(label, callback_data=f"{_CB_SET}{channel_db_id}:{s_id}")])
+
+    rows.append([InlineKeyboardButton("< Back", callback_data=_CB_BACK)])
+    return "Select a schedule:", InlineKeyboardMarkup(rows)
+
+
+async def select_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/select — show the channel/schedule picker."""
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
         return
 
-    text, entities = await _selection_summary_for_user(update.effective_user.id)
-    await update.message.reply_text(text, entities=entities)
+    text, keyboard = await _channels_keyboard(update.effective_user.id)
+    await update.message.reply_text(text, reply_markup=keyboard)
 
 
-async def clearselection_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Clear current selection."""
-    await ensure_user_record(update, context)
-    if update.message is None or update.effective_user is None:
+async def select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle sc:* inline keyboard callbacks for /select."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
         return
 
-    await db.clear_user_context(update.effective_user.id)
-    await update.message.reply_text("Selection cleared.")
+    await query.answer()
+    data = query.data or ""
+    user_id = update.effective_user.id
 
-
-async def selectchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Select a channel as the default target for channel-level operations."""
-    await ensure_user_record(update, context)
-    if update.message is None or update.effective_user is None:
+    if data == _CB_BACK:
+        text, keyboard = await _channels_keyboard(user_id)
+        try:
+            await query.edit_message_text(text, reply_markup=keyboard)
+        except Exception:
+            pass
         return
 
-    if not context.args or len(context.args) != 1:
-        await update.message.reply_text(
-            "Usage: /selectchannel <@channel or -100...>\n"
-            "Tip: use /listchannels to see your verified channels.\n"
-            "If you don't know the numeric id yet, post /channelid in the channel after adding me as admin."
+    if data.startswith(_CB_CHANNEL):
+        try:
+            channel_db_id = int(data[len(_CB_CHANNEL):])
+        except ValueError:
+            return
+
+        # Ownership check.
+        channels = await db.get_user_channels(user_id)
+        if channel_db_id not in {int(c["id"]) for c in channels}:
+            await query.answer("Channel not found.", show_alert=True)
+            return
+
+        text, keyboard = await _schedules_keyboard(channel_db_id)
+        try:
+            await query.edit_message_text(text, reply_markup=keyboard)
+        except Exception:
+            pass
+        return
+
+    if data.startswith(_CB_SET):
+        parts = data[len(_CB_SET):].split(":")
+        if len(parts) != 2:
+            return
+        try:
+            channel_db_id = int(parts[0])
+            schedule_id = int(parts[1])
+        except ValueError:
+            return
+
+        schedule = await db.get_schedule_for_user(user_id, schedule_id)
+        if schedule is None or int(schedule.get("channel_id", -1)) != channel_db_id:
+            await query.answer("Schedule not found.", show_alert=True)
+            return
+
+        await db.set_user_context(
+            user_id=user_id,
+            selected_channel_id=channel_db_id,
+            selected_schedule_id=schedule_id,
         )
-        return
 
-    telegram_channel_id = await resolve_channel_id(context, context.args[0])
-    if telegram_channel_id is None:
-        await update.message.reply_text(
-            "Could not resolve that channel.\n"
-            "Tip: use /listchannels to copy the numeric id."
-        )
-        return
-
-    channel = await db_access.get_channel_by_telegram_id_for_user(update.effective_user.id, telegram_channel_id)
-    if channel is None:
-        await update.message.reply_text("Channel not found or not owned by you.")
-        return
-
-    await db.set_user_context(
-        user_id=update.effective_user.id,
-        selected_channel_id=int(channel["id"]),
-        selected_schedule_id=None,
-    )
-
-    details = await db.get_user_context_details(update.effective_user.id)
-    segments = [Segment("Selected channel.\n\n"), *selection_segments(details)]
-    text, entities = render(segments)
-    await update.message.reply_text(text, entities=entities)
-
-
-async def selectschedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Select a schedule as the default target for schedule/queue operations."""
-    await ensure_user_record(update, context)
-    if update.message is None or update.effective_user is None:
-        return
-
-    if not context.args or len(context.args) != 1:
-        await update.message.reply_text("Usage: /selectschedule <schedule_id>\nTip: use /listschedules first.")
-        return
-
-    try:
-        schedule_id = int(context.args[0])
-    except ValueError:
-        await update.message.reply_text("Invalid schedule id.")
-        return
-
-    schedule = await db.get_schedule_for_user(update.effective_user.id, schedule_id)
-    if schedule is None:
-        await update.message.reply_text("Schedule not found or not owned by you.")
-        return
-
-    await db.set_user_context(
-        user_id=update.effective_user.id,
-        selected_channel_id=int(schedule["channel_id"]),
-        selected_schedule_id=schedule_id,
-    )
-
-    details = await db.get_user_context_details(update.effective_user.id)
-    segments = [Segment("Selected schedule.\n\n"), *selection_segments(details)]
-    text, entities = render(segments)
-    await update.message.reply_text(text, entities=entities)
-
+        details = await db.get_user_context_details(user_id)
+        channel_name = details.get("channel_name") or f"Channel {channel_db_id}"
+        schedule_name = details.get("schedule_name") or f"Schedule {schedule_id}"
+        try:
+            await query.edit_message_text(f"Selected: {channel_name} / {schedule_name}.")
+        except Exception:
+            pass
+        logger.info("User %s selected channel=%s schedule=%s", user_id, channel_db_id, schedule_id)

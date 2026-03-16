@@ -5,47 +5,24 @@ from __future__ import annotations
 import logging
 import os
 
-import re
-
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from handlers.admin import broadcast_command, debug_command, stats_command
 from handlers.channel_info import channelid_command
-from handlers.channel_management import list_channels_command, remove_channel_command
+from handlers.channel_management import channels_conversation_handler
 from handlers.bulk_upload import bulk_upload_conversation_handler
-from handlers.forwarding import addforward_command, clearforward_command, forwarding_command, removeforward_command
+from handlers.forwarding import forward_conversation_handler
 from handlers.queue_management import (
     delete_post_command,
     pin_date_conversation_handler,
     queue_browser_callback,
-    test_schedule_command,
     view_queue_command,
 )
-from handlers.schedule_management import (
-    copy_schedule_command,
-    delete_schedule_command,
-    edit_schedule_conversation_handler,
-    list_schedules_command,
-    new_schedule_conversation_handler,
-    pause_schedule_command,
-    resume_schedule_command,
-    setscheduletimezone_command,
-)
-from handlers.selection import (
-    clearselection_command,
-    selectchannel_command,
-    selectschedule_command,
-    selection_command,
-)
-from handlers.menu import menu_callback, menu_command
-from handlers.timezone_management import (
-    gettimezone_command,
-    settimezone_command,
-    timezone_callback,
-    timezone_command,
-)
+from handlers.schedule_management import schedules_conversation_handler
+from handlers.selection import select_callback, select_command
+from handlers.timezone_management import timezone_callback, timezone_command
 from handlers.user_commands import help_command, start_command
-from handlers.verification import add_channel_command, channel_post_handler
+from handlers.verification import channel_post_handler
 
 logger = logging.getLogger(__name__)
 
@@ -90,55 +67,34 @@ def create_application() -> Application:
     # Core user commands
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("menu", menu_command))
-    application.add_handler(
-        MessageHandler(filters.Regex(re.compile(r"^Menu$")) & filters.ChatType.PRIVATE, menu_command)
-    )
+    application.add_handler(CommandHandler("select", select_command))
+    application.add_handler(CallbackQueryHandler(select_callback, pattern=r"^sc:"))
     application.add_handler(CommandHandler("timezone", timezone_command))
-    application.add_handler(CommandHandler("gettimezone", gettimezone_command))
-    application.add_handler(CommandHandler("settimezone", settimezone_command))
     application.add_handler(CallbackQueryHandler(timezone_callback, pattern=r"^tz:"))
 
-    # Channel verification and management
-    application.add_handler(CommandHandler("addchannel", add_channel_command))
+    # Channel management (/channels)
+    application.add_handler(channels_conversation_handler)
+    # /channelid stays registered — it fires when posted in a channel and helps
+    # users discover their channel ID before adding via /channels.
     application.add_handler(CommandHandler("channelid", channelid_command))
-    application.add_handler(CommandHandler("listchannels", list_channels_command))
-    application.add_handler(CommandHandler("removechannel", remove_channel_command))
 
-    # Selection helpers
-    application.add_handler(CommandHandler("selection", selection_command))
-    application.add_handler(CommandHandler("selectchannel", selectchannel_command))
-    application.add_handler(CommandHandler("selectschedule", selectschedule_command))
-    application.add_handler(CommandHandler("clearselection", clearselection_command))
-
-    # Forwarding configuration (per user)
-    application.add_handler(CommandHandler("forwarding", forwarding_command))
-    application.add_handler(CommandHandler("addforward", addforward_command))
-    application.add_handler(CommandHandler("removeforward", removeforward_command))
-    application.add_handler(CommandHandler("clearforward", clearforward_command))
+    # Forwarding allowlist (/forward)
+    application.add_handler(forward_conversation_handler)
 
     # Bulk upload (Phase 4)
     application.add_handler(bulk_upload_conversation_handler)
 
-    # Schedule management (Phase 3)
-    application.add_handler(new_schedule_conversation_handler)
-    application.add_handler(edit_schedule_conversation_handler)
-    application.add_handler(CommandHandler("listschedules", list_schedules_command))
-    application.add_handler(CommandHandler("pauseschedule", pause_schedule_command))
-    application.add_handler(CommandHandler("resumeschedule", resume_schedule_command))
-    application.add_handler(CommandHandler("deleteschedule", delete_schedule_command))
-    application.add_handler(CommandHandler("copyschedule", copy_schedule_command))
-    application.add_handler(CommandHandler("setscheduletimezone", setscheduletimezone_command))
+    # Schedule management (/schedules)
+    application.add_handler(schedules_conversation_handler)
 
-    # Queue management (Phase 3 / Phase 7)
+    # Queue management (/queue alias + legacy /viewqueue, /deletepost)
+    application.add_handler(CommandHandler("queue", view_queue_command))
     application.add_handler(CommandHandler("viewqueue", view_queue_command))
     application.add_handler(CommandHandler("deletepost", delete_post_command))
-    application.add_handler(CommandHandler("testschedule", test_schedule_command))
     # Pin-date conversation must be registered before the general qv: handler
     # so its qv:pd:* entry point takes priority.
     application.add_handler(pin_date_conversation_handler)
     application.add_handler(CallbackQueryHandler(queue_browser_callback, pattern=r"^qv:"))
-    application.add_handler(CallbackQueryHandler(menu_callback, pattern=r"^mn:"))
 
     # Channel posts: verification code detection
     application.add_handler(

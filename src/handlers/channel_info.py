@@ -43,8 +43,9 @@ async def channelid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         segments += [Segment("\n- Username: "), Segment(username, code=True)]
 
     segments += [
-        Segment("\n\nTo verify this channel, send this command to me in private:\n"),
-        Segment("/addchannel "),
+        Segment("\n\nTo add this channel, go to me in private and use "),
+        Segment("/channels"),
+        Segment(" > Add channel, then send:\n"),
         Segment(telegram_channel_id, code=True),
     ]
 

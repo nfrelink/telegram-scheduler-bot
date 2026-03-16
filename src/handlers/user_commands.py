@@ -9,7 +9,6 @@ from telegram.ext import ContextTypes
 
 from database import queries as db
 from .common import ensure_user_record
-from .menu import PERSISTENT_KEYBOARD
 from .timezone_management import send_timezone_prompt
 from utils.tg_text import Segment, render
 
@@ -20,53 +19,15 @@ def _help_text() -> str:
     return (
         "Available commands:\n"
         "\n"
-        "- /start — Welcome message\n"
-        "- /help — Show this help\n"
-        "\n"
-        "Timezone:\n"
-        "- /timezone — Set your timezone (guided selection)\n"
-        "- /gettimezone — Show your current timezone\n"
-        "- /settimezone <timezone> — Set timezone by IANA name (power user)\n"
-        "\n"
-        "Channels:\n"
-        "- /addchannel <@channel or -100...> — Verify a channel\n"
-        "- /channelid — Post the channel ID (run inside the channel)\n"
-        "- /listchannels — List your verified channels\n"
-        "- /removechannel <@channel or -100...> — Remove a verified channel\n"
-        "\n"
-        "Selection (optional, but recommended):\n"
-        "- /selectchannel <channel_id> — Set default channel\n"
-        "- /selectschedule <schedule_id> — Set default schedule\n"
-        "- /selection — Show current selection\n"
-        "- /clearselection — Clear selection\n"
-        "\n"
-        "Forwarding (optional):\n"
-        "- /forwarding — Show forwarding allowlist (origin channels)\n"
-        "- /addforward <origin_channel_id> — Add origin channel to allowlist\n"
-        "- /removeforward <origin_channel_id> — Remove origin channel from allowlist\n"
-        "- /clearforward — Clear forwarding allowlist\n"
-        "\n"
-        "Note: messages from allowlisted channels are always forwarded natively in /bulk, regardless of caption mode.\n"
-        "\n"
-        "Tip: when a channel/schedule is selected, many commands work without an explicit id.\n"
-        "\n"
-        "Schedules:\n"
-        "- /newschedule [channel_id] — Create a schedule (interactive)\n"
-        "- /listschedules [channel_id] — List schedules for a channel\n"
-        "- /editschedule <schedule_id> — Edit a schedule (interactive)\n"
-        "- /setscheduletimezone [schedule_id] <timezone> — Set a schedule timezone\n"
-        "- /pauseschedule [schedule_id]\n"
-        "- /resumeschedule [schedule_id]\n"
-        "- /deleteschedule [schedule_id]\n"
-        "- /copyschedule <schedule_id> <target_channel_id>\n"
-        "\n"
-        "Queue:\n"
-        "- /viewqueue [schedule_id] [count]\n"
-        "- /deletepost <post_id>\n"
-        "- /testschedule [schedule_id] [run_count]\n"
+        "- /select — Pick active channel and schedule\n"
+        "- /queue — Browse and manage the post queue\n"
+        "- /timezone — Set your display timezone\n"
+        "- /channels — Add or remove channels\n"
+        "- /schedules — Create, edit, and manage schedules\n"
+        "- /forward — Manage native-forwarding allowlist\n"
         "\n"
         "Bulk upload:\n"
-        "- /bulk [schedule_id]\n"
+        "- /bulk [schedule_id] — Start queuing posts\n"
         "- /done (inside bulk upload)\n"
         "- /cancel\n"
     )
@@ -75,28 +36,21 @@ def _help_text() -> str:
 def _onboarding_segments() -> list[Segment]:
     return [
         Segment("Quick start:\n"),
-        Segment("1) Add this bot to your channel as an administrator (with permission to post messages)\n"),
-        Segment("2) In the channel, post "),
-        Segment("/channelid"),
-        Segment(" to show the numeric channel id\n"),
-        Segment("3) In private chat, run "),
-        Segment("/addchannel"),
-        Segment(" <channel_id> and post the verification code to the channel\n"),
-        Segment("4) Optional (recommended): set defaults with "),
-        Segment("/selectchannel"),
-        Segment(" and "),
-        Segment("/selectschedule"),
-        Segment(" (check with "),
-        Segment("/selection"),
-        Segment(")\n"),
-        Segment("5) Create schedules with "),
-        Segment("/newschedule"),
-        Segment(" and queue posts with "),
+        Segment("1) Use "),
+        Segment("/channels"),
+        Segment(" to add a channel (the bot must be an admin there)\n"),
+        Segment("2) Use "),
+        Segment("/schedules"),
+        Segment(" to create a posting schedule\n"),
+        Segment("3) Use "),
+        Segment("/select"),
+        Segment(" to pick a channel and schedule as your active target\n"),
+        Segment("4) Send media or use "),
         Segment("/bulk"),
-        Segment("\n\nOptional: configure forwarding allowlist with "),
-        Segment("/forwarding"),
-        Segment(" to preserve 'Forwarded from ...' attribution for selected source channels.\n"),
-        Segment("Messages from allowlisted channels are always forwarded natively in /bulk, regardless of caption mode.\n"),
+        Segment(" to queue posts\n"),
+        Segment("5) Use "),
+        Segment("/queue"),
+        Segment(" to browse and manage what is queued\n"),
     ]
 
 
@@ -125,7 +79,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             segments += [Segment("\n"), *selection_segments(details)]
 
         text, entities = render(segments)
-        await update.message.reply_text(text, entities=entities, reply_markup=PERSISTENT_KEYBOARD)
+        await update.message.reply_text(text, entities=entities)
 
         # If timezone is not yet configured, prompt immediately after welcome.
         if not await db.get_user_timezone(user_id):

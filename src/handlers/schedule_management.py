@@ -1,4 +1,10 @@
-"""Schedule creation and management commands."""
+"""Schedule management — single /schedules command.
+
+/schedules lists schedules for the currently selected channel.  Each schedule
+has inline action buttons (Pause/Resume, Edit, Set TZ, Delete).  Delete shows
+cascade counts and asks for inline confirmation.  New and Edit transition into
+embedded wizard states so everything stays in one conversation.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +12,9 @@ import logging
 import os
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -19,33 +26,39 @@ from database import access as db_access
 from database import queries as db
 from handlers.common import ensure_user_record
 from handlers.selection import selection_segments
-from handlers.verification import resolve_channel_id
 from scheduler.timing import WEEKDAY_NAME_TO_INT, parse_time_string, validate_schedule_pattern
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# State constants — unique across the merged ConversationHandler
+# ---------------------------------------------------------------------------
 
-# Conversation state enums
-(
-    NS_WAIT_NAME,
-    NS_WAIT_TYPE,
-    NS_WAIT_INTERVAL,
-    NS_WAIT_DAILY_TIMES,
-    NS_WAIT_WEEKLY_DAYS,
-    NS_WAIT_WEEKLY_TIMES,
-) = range(6)
+SM_SHOWING = 0        # schedule list with action buttons
+SM_WAIT_TZ_INPUT = 1  # awaiting timezone string for set-timezone action
 
-(
-    ES_WAIT_FIELD,
-    ES_WAIT_NAME,
-    ES_WAIT_TYPE,
-    ES_WAIT_INTERVAL,
-    ES_WAIT_DAILY_TIMES,
-    ES_WAIT_WEEKLY_DAYS,
-    ES_WAIT_WEEKLY_TIMES,
-) = range(7)
+# Embedded new-schedule wizard states
+NS_WAIT_NAME = 10
+NS_WAIT_TYPE = 11
+NS_WAIT_INTERVAL = 12
+NS_WAIT_DAILY_TIMES = 13
+NS_WAIT_WEEKLY_DAYS = 14
+NS_WAIT_WEEKLY_TIMES = 15
 
+# Embedded edit-schedule wizard states
+ES_WAIT_FIELD = 20
+ES_WAIT_NAME = 21
+ES_WAIT_TYPE = 22
+ES_WAIT_INTERVAL = 23
+ES_WAIT_DAILY_TIMES = 24
+ES_WAIT_WEEKLY_DAYS = 25
+ES_WAIT_WEEKLY_TIMES = 26
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
 
 def _default_timezone_name() -> str:
     return os.getenv("DEFAULT_TIMEZONE", "UTC") or "UTC"
@@ -62,17 +75,8 @@ def _is_valid_timezone_name(tz_name: str) -> bool:
     try:
         ZoneInfo(tz_name)
         return True
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, Exception):
         return False
-    except Exception:
-        return False
-
-
-def _parse_schedule_id(text: str) -> int | None:
-    try:
-        return int(text.strip())
-    except ValueError:
-        return None
 
 
 def _parse_int(text: str) -> int | None:
@@ -82,51 +86,40 @@ def _parse_int(text: str) -> int | None:
         return None
 
 
+def _parse_schedule_id(text: str) -> int | None:
+    return _parse_int(text)
+
+
 def _parse_interval_input(text: str) -> tuple[int, int] | None:
     """Parse an interval like '1h', '30m', or '90' (minutes)."""
     raw = text.strip().lower().replace(" ", "")
     if not raw:
         return None
-
     if raw.endswith("h"):
         n = _parse_int(raw[:-1])
-        if n is None or n <= 0:
-            return None
-        return n, 0
-
+        return (n, 0) if n and n > 0 else None
     if raw.endswith("m"):
         n = _parse_int(raw[:-1])
-        if n is None or n <= 0:
-            return None
-        return 0, n
-
+        return (0, n) if n and n > 0 else None
     n = _parse_int(raw)
-    if n is None or n <= 0:
-        return None
-    return 0, n
+    return (0, n) if n and n > 0 else None
 
 
 def _parse_times_csv(text: str) -> list[str] | None:
     parts = [p.strip() for p in text.split(",") if p.strip()]
-    if not parts:
+    if not parts or not all(parse_time_string(p) for p in parts):
         return None
-    if not all(parse_time_string(p) for p in parts):
-        return None
-    # Normalize to HH:MM
-    normalized: list[str] = []
+    normalized = []
     for p in parts:
-        hour, minute = parse_time_string(p) or (0, 0)
-        normalized.append(f"{hour:02d}:{minute:02d}")
+        h, m = parse_time_string(p) or (0, 0)
+        normalized.append(f"{h:02d}:{m:02d}")
     return normalized
 
 
 def _parse_weekdays_csv(text: str) -> list[str] | None:
     parts = [p.strip().lower() for p in text.split(",") if p.strip()]
-    if not parts:
+    if not parts or not all(p in WEEKDAY_NAME_TO_INT for p in parts):
         return None
-    if not all(p in WEEKDAY_NAME_TO_INT for p in parts):
-        return None
-    # Preserve user order but de-duplicate
     seen: set[str] = set()
     result: list[str] = []
     for p in parts:
@@ -137,113 +130,346 @@ def _parse_weekdays_csv(text: str) -> list[str] | None:
 
 
 def _pattern_summary(pattern: dict, *, tz_name: str | None = None) -> str:
-    schedule_type = pattern.get("type")
     tz_label = tz_name or "UTC"
-    if schedule_type == "interval":
+    t = pattern.get("type")
+    if t == "interval":
         h = int(pattern.get("hours", 0) or 0)
         m = int(pattern.get("minutes", 0) or 0)
         return f"interval ({h}h {m}m)"
-    if schedule_type == "daily":
-        times = ", ".join(pattern.get("times", []))
-        return f"daily ({times} {tz_label})"
-    if schedule_type == "weekly":
+    if t == "daily":
+        return f"daily ({', '.join(pattern.get('times', []))} {tz_label})"
+    if t == "weekly":
         days = ", ".join(pattern.get("days", []))
         times = ", ".join(pattern.get("times", []))
         return f"weekly ({days} at {times} {tz_label})"
     return "unknown"
 
 
-# --- /newschedule conversation ----------------------------------------------
+def _clear_ns_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for key in list(context.user_data.keys()):
+        if key.startswith("ns_"):
+            context.user_data.pop(key, None)
 
 
-async def newschedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Begin interactive schedule creation."""
+def _clear_es_state(context: ContextTypes.DEFAULT_TYPE) -> None:
+    for key in list(context.user_data.keys()):
+        if key.startswith("es_"):
+            context.user_data.pop(key, None)
+
+
+# ---------------------------------------------------------------------------
+# /schedules — list display
+# ---------------------------------------------------------------------------
+
+_STATE_LABEL = {"active": "active", "paused": "paused", "empty_paused": "empty"}
+
+
+async def _schedules_list_text_and_keyboard(
+    user_id: int,
+) -> tuple[str, InlineKeyboardMarkup | None]:
+    """Build the schedule list display for the user's currently selected channel."""
+    user_ctx = await db.get_user_context(user_id)
+    sel_ch_id = user_ctx.get("selected_channel_id")
+    if sel_ch_id is None:
+        return "No channel selected. Use /select to pick a channel first.", None
+
+    channel = await db_access.get_channel_by_id_for_user(user_id, int(sel_ch_id))
+    if channel is None:
+        return "Selected channel not found.", None
+
+    ch_name = str(channel.get("channel_name") or f"Channel {sel_ch_id}")
+    schedules = await db.get_channel_schedules(int(channel["id"]))
+
+    if not schedules:
+        return (
+            f"No schedules for '{ch_name}'.",
+            InlineKeyboardMarkup([[InlineKeyboardButton("New schedule", callback_data="sm:new")]]),
+        )
+
+    rows: list[list[InlineKeyboardButton]] = []
+    for s in schedules:
+        s_id = int(s["id"])
+        name = str(s.get("name") or f"Schedule {s_id}")
+        state = str(s.get("state") or "")
+        count = await db.get_queue_count(s_id)
+        state_label = _STATE_LABEL.get(state, state)
+        tz = str(s.get("timezone") or "UTC")
+
+        rows.append([InlineKeyboardButton(
+            f"{name}  •  {state_label}  •  {count} queued  •  {tz}",
+            callback_data="sm:noop",
+        )])
+        action_row: list[InlineKeyboardButton] = []
+        if state == "active":
+            action_row.append(InlineKeyboardButton("Pause", callback_data=f"sm:pause:{s_id}"))
+        else:
+            action_row.append(InlineKeyboardButton("Resume", callback_data=f"sm:resume:{s_id}"))
+        action_row += [
+            InlineKeyboardButton("Edit", callback_data=f"sm:edit:{s_id}"),
+            InlineKeyboardButton("Set TZ", callback_data=f"sm:settp:{s_id}"),
+            InlineKeyboardButton("Delete", callback_data=f"sm:rm:{s_id}"),
+        ]
+        rows.append(action_row)
+
+    rows.append([InlineKeyboardButton("New schedule", callback_data="sm:new")])
+    return f"Schedules for '{ch_name}':", InlineKeyboardMarkup(rows)
+
+
+async def schedules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/schedules — show the schedule list with action buttons."""
     await ensure_user_record(update, context)
-
-    if update.message is None or update.effective_user is None:
+    if update.message is None or update.effective_user is None or update.effective_chat is None:
         return ConversationHandler.END
 
-    channel: dict | None = None
-    telegram_channel_id: str | None = None
+    text, keyboard = await _schedules_list_text_and_keyboard(update.effective_user.id)
+    if keyboard is None:
+        await update.message.reply_text(text)
+        return ConversationHandler.END
 
-    if context.args and len(context.args) == 1:
-        telegram_channel_id = await resolve_channel_id(context, context.args[0])
-        if telegram_channel_id is None:
-            await update.message.reply_text(
-                "Could not resolve that channel. Use /listchannels and copy the channel id."
+    sent = await update.message.reply_text(text, reply_markup=keyboard)
+    context.user_data["sm_msg_id"] = sent.message_id
+    context.user_data["sm_chat_id"] = update.effective_chat.id
+    return SM_SHOWING
+
+
+async def _refresh_list(user_id: int, context: ContextTypes.DEFAULT_TYPE, query=None) -> None:
+    """Edit the stored list message to show the current schedule state."""
+    text, keyboard = await _schedules_list_text_and_keyboard(user_id)
+    if query is not None:
+        try:
+            if keyboard:
+                await query.edit_message_text(text, reply_markup=keyboard)
+            else:
+                await query.edit_message_text(text)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# /schedules — inline action callbacks (SM_SHOWING state)
+# ---------------------------------------------------------------------------
+
+async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle sm:* inline keyboard callbacks."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return SM_SHOWING
+
+    await query.answer()
+    data = query.data or ""
+    user_id = update.effective_user.id
+
+    # --- sm:noop ---
+    if data == "sm:noop":
+        return SM_SHOWING
+
+    # --- sm:back — refresh list ---
+    if data == "sm:back":
+        await _refresh_list(user_id, context, query)
+        return SM_SHOWING
+
+    # --- sm:pause:{id} ---
+    if data.startswith("sm:pause:"):
+        try:
+            s_id = int(data[9:])
+        except ValueError:
+            return SM_SHOWING
+        schedule = await db.get_schedule_for_user(user_id, s_id)
+        if schedule is None:
+            await query.answer("Schedule not found.", show_alert=True)
+            return SM_SHOWING
+        await db.update_schedule_state(s_id, "paused")
+        await _refresh_list(user_id, context, query)
+        return SM_SHOWING
+
+    # --- sm:resume:{id} ---
+    if data.startswith("sm:resume:"):
+        try:
+            s_id = int(data[10:])
+        except ValueError:
+            return SM_SHOWING
+        schedule = await db.get_schedule_for_user(user_id, s_id)
+        if schedule is None:
+            await query.answer("Schedule not found.", show_alert=True)
+            return SM_SHOWING
+        count = await db.get_queue_count(s_id)
+        if count == 0:
+            await query.answer(
+                "Queue is empty — add posts with /bulk before resuming.", show_alert=True
             )
-            return ConversationHandler.END
+            return SM_SHOWING
+        await db.update_schedule_state(s_id, "active")
+        await _refresh_list(user_id, context, query)
+        return SM_SHOWING
 
-        channel = await db_access.get_channel_by_telegram_id_for_user(update.effective_user.id, telegram_channel_id)
+    # --- sm:rm:{id} — show delete confirmation ---
+    if data.startswith("sm:rm:"):
+        try:
+            s_id = int(data[6:])
+        except ValueError:
+            return SM_SHOWING
+        schedule = await db.get_schedule_for_user(user_id, s_id)
+        if schedule is None:
+            await query.answer("Schedule not found.", show_alert=True)
+            return SM_SHOWING
+        n_posts = await db.get_queue_count(s_id)
+        name = str(schedule.get("name") or f"Schedule {s_id}")
+        lines = [f"Delete '{name}'?"]
+        if n_posts:
+            lines.append(f"This will also delete {n_posts} queued post(s).")
+        try:
+            await query.edit_message_text(
+                "\n".join(lines),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Yes, delete", callback_data=f"sm:rmok:{s_id}"),
+                    InlineKeyboardButton("Cancel", callback_data="sm:back"),
+                ]]),
+            )
+        except Exception:
+            pass
+        return SM_SHOWING
+
+    # --- sm:rmok:{id} — perform deletion ---
+    if data.startswith("sm:rmok:"):
+        try:
+            s_id = int(data[8:])
+        except ValueError:
+            return SM_SHOWING
+        schedule = await db.get_schedule_for_user(user_id, s_id)
+        if schedule is None:
+            await query.answer("Schedule not found.", show_alert=True)
+            return SM_SHOWING
+        await db.delete_schedule(s_id)
+        logger.info("User %s deleted schedule %s", user_id, s_id)
+        await _refresh_list(user_id, context, query)
+        return SM_SHOWING
+
+    # --- sm:settp:{id} — ask for timezone ---
+    if data.startswith("sm:settp:"):
+        try:
+            s_id = int(data[9:])
+        except ValueError:
+            return SM_SHOWING
+        schedule = await db.get_schedule_for_user(user_id, s_id)
+        if schedule is None:
+            await query.answer("Schedule not found.", show_alert=True)
+            return SM_SHOWING
+        context.user_data["sm_settp_schedule_id"] = s_id
+        try:
+            await query.edit_message_text(
+                f"Enter the timezone for '{schedule['name']}' (e.g. Europe/Amsterdam, UTC).\n\n"
+                "/cancel to abort."
+            )
+        except Exception:
+            pass
+        return SM_WAIT_TZ_INPUT
+
+    # --- sm:new — start new schedule wizard ---
+    if data == "sm:new":
+        user_ctx = await db.get_user_context(user_id)
+        sel_ch_id = user_ctx.get("selected_channel_id")
+        if sel_ch_id is None:
+            await query.answer("Select a channel first with /select.", show_alert=True)
+            return SM_SHOWING
+        channel = await db_access.get_channel_by_id_for_user(user_id, int(sel_ch_id))
         if channel is None:
-            await update.message.reply_text(
-                "Channel not found or you don't have permission to create schedules for it.\n"
-                "Use /listchannels to see your verified channels."
+            await query.answer("Selected channel not found.", show_alert=True)
+            return SM_SHOWING
+        _clear_ns_state(context)
+        context.user_data["ns_channel_db_id"] = int(channel["id"])
+        context.user_data["ns_channel_name"] = str(channel["channel_name"])
+        context.user_data["ns_timezone"] = await _effective_user_timezone_name(user_id)
+        tz_name = context.user_data["ns_timezone"]
+        try:
+            await query.edit_message_text(
+                f"New schedule for '{channel['channel_name']}'.\n"
+                f"Timezone: {tz_name}\n\n"
+                "Enter a schedule name (or /cancel)."
             )
-            return ConversationHandler.END
+        except Exception:
+            pass
+        return NS_WAIT_NAME
 
-        # Using an explicit channel also updates selection (clears schedule selection).
-        await db.set_user_context(
-            user_id=update.effective_user.id,
-            selected_channel_id=int(channel["id"]),
-            selected_schedule_id=None,
+    # --- sm:edit:{id} — start edit schedule wizard ---
+    if data.startswith("sm:edit:"):
+        try:
+            s_id = int(data[8:])
+        except ValueError:
+            return SM_SHOWING
+        schedule = await db.get_schedule_for_user(user_id, s_id)
+        if schedule is None:
+            await query.answer("Schedule not found.", show_alert=True)
+            return SM_SHOWING
+        _clear_es_state(context)
+        context.user_data["es_schedule_id"] = s_id
+        context.user_data["es_current_name"] = schedule.get("name")
+        context.user_data["es_current_pattern"] = schedule.get("pattern")
+        context.user_data["es_timezone"] = str(schedule.get("timezone") or _default_timezone_name())
+        tz_name = context.user_data["es_timezone"]
+        try:
+            await query.edit_message_text(
+                f"Editing '{schedule['name']}' (timezone: {tz_name}).\n\n"
+                "What do you want to edit? Reply with: name or pattern\n\n"
+                "/cancel to stop."
+            )
+        except Exception:
+            pass
+        return ES_WAIT_FIELD
+
+    return SM_SHOWING
+
+
+# ---------------------------------------------------------------------------
+# SM_WAIT_TZ_INPUT — set schedule timezone
+# ---------------------------------------------------------------------------
+
+async def schedules_tz_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle timezone text input for the Set TZ action."""
+    msg = update.message
+    if msg is None or update.effective_user is None:
+        return SM_WAIT_TZ_INPUT
+
+    raw = (msg.text or "").strip()
+    if not raw:
+        await msg.reply_text("Enter a timezone name (e.g. Europe/Amsterdam) or /cancel.")
+        return SM_WAIT_TZ_INPUT
+
+    if not _is_valid_timezone_name(raw):
+        await msg.reply_text(
+            f"Unknown timezone: {raw!r}\n"
+            "Use an IANA timezone name like Europe/Amsterdam, UTC, America/New_York."
         )
-    else:
-        # No argument: fall back to selected channel.
-        user_ctx = await db.get_user_context(update.effective_user.id)
-        selected_channel_id = user_ctx.get("selected_channel_id")
-        if selected_channel_id is None:
-            await update.message.reply_text(
-                "Usage: /newschedule <channel_id>\n"
-                "Example: /newschedule -1001234567890\n\n"
-                "Tip: select a default channel first:\n"
-                "- /listchannels\n"
-                "- /selectchannel <channel_id>"
-            )
-            return ConversationHandler.END
+        return SM_WAIT_TZ_INPUT
 
-        channel = await db_access.get_channel_by_id_for_user(update.effective_user.id, int(selected_channel_id))
-        if channel is None:
-            await update.message.reply_text(
-                "Your selected channel is missing or not owned by you.\n"
-                "Use /listchannels and /selectchannel again."
-            )
-            return ConversationHandler.END
+    s_id = context.user_data.get("sm_settp_schedule_id")
+    if s_id is None:
+        await msg.reply_text("Session expired. Use /schedules to start again.")
+        return ConversationHandler.END
 
-        telegram_channel_id = str(channel["channel_id"])
+    schedule = await db.get_schedule_for_user(update.effective_user.id, int(s_id))
+    if schedule is None:
+        await msg.reply_text("Schedule not found.")
+        return ConversationHandler.END
 
-    context.user_data["ns_channel_db_id"] = int(channel["id"])
-    context.user_data["ns_channel_name"] = str(channel["channel_name"])
-    context.user_data["ns_timezone"] = await _effective_user_timezone_name(update.effective_user.id)
+    await db.update_schedule_timezone(int(s_id), timezone_name=raw)
+    logger.info("User %s set timezone of schedule %s to %s", update.effective_user.id, s_id, raw)
+    await msg.reply_text(f"Timezone for '{schedule['name']}' set to {raw}.")
+    context.user_data.pop("sm_settp_schedule_id", None)
+    return ConversationHandler.END
 
-    # Remind which channel we are creating a schedule for.
-    details = await db.get_user_context_details(update.effective_user.id)
-    header = selection_segments(details)
-    tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
-    msg_text, msg_entities = render(
-        [
-            *header,
-            Segment("\n\nTimezone: "),
-            Segment(tz_name, code=True),
-            Segment(" (change with "),
-            Segment("/settimezone"),
-            Segment(")\n\nEnter a schedule name (or /cancel)."),
-        ]
-    )
-    await update.message.reply_text(msg_text, entities=msg_entities)
-    return NS_WAIT_NAME
 
+# ---------------------------------------------------------------------------
+# New-schedule wizard (NS_*) — embedded in schedules_conversation_handler
+# ---------------------------------------------------------------------------
 
 async def newschedule_set_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     name = (update.message.text or "").strip()
     if not name:
         await update.message.reply_text("Schedule name cannot be empty. Enter a name (or /cancel).")
         return NS_WAIT_NAME
-
     context.user_data["ns_name"] = name
     await update.message.reply_text(
         "Choose schedule type: interval, daily, weekly\n"
@@ -256,57 +482,42 @@ async def newschedule_set_type(update: Update, context: ContextTypes.DEFAULT_TYP
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     schedule_type = (update.message.text or "").strip().lower()
     if schedule_type not in {"interval", "daily", "weekly"}:
         await update.message.reply_text("Invalid type. Reply with: interval, daily, weekly")
         return NS_WAIT_TYPE
-
     context.user_data["ns_type"] = schedule_type
-
     if schedule_type == "interval":
-        await update.message.reply_text(
-            "Enter interval (examples: 1h, 30m, 90)."
-        )
+        await update.message.reply_text("Enter interval (examples: 1h, 30m, 90).")
         return NS_WAIT_INTERVAL
-
+    tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
     if schedule_type == "daily":
-        tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
         await update.message.reply_text(
             f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
-            "Example: 09:00,16:00\n"
-            "Tip: change your default timezone with /settimezone."
+            "Example: 09:00,16:00"
         )
         return NS_WAIT_DAILY_TIMES
-
-    if schedule_type == "weekly":
-        await update.message.reply_text(
-            "Enter weekdays separated by commas.\n"
-            "Example: monday,tuesday,wednesday,thursday,friday"
-        )
-        return NS_WAIT_WEEKLY_DAYS
-
-    await update.message.reply_text("Invalid type. Reply with: interval, daily, weekly")
-    return NS_WAIT_TYPE
+    await update.message.reply_text(
+        "Enter weekdays separated by commas.\n"
+        "Example: monday,tuesday,wednesday,thursday,friday"
+    )
+    return NS_WAIT_WEEKLY_DAYS
 
 
 async def newschedule_set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     parsed = _parse_interval_input(update.message.text or "")
     if parsed is None:
         await update.message.reply_text("Invalid interval. Try: 1h, 30m, or 90")
         return NS_WAIT_INTERVAL
-
     hours, minutes = parsed
-    pattern = {"type": "interval"}
+    pattern: dict = {"type": "interval"}
     if hours:
         pattern["hours"] = hours
     if minutes:
         pattern["minutes"] = minutes
-
     return await _newschedule_finalize(update, context, pattern)
 
 
@@ -314,7 +525,6 @@ async def newschedule_set_daily_times(update: Update, context: ContextTypes.DEFA
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     times = _parse_times_csv(update.message.text or "")
     if times is None:
         tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
@@ -322,29 +532,22 @@ async def newschedule_set_daily_times(update: Update, context: ContextTypes.DEFA
             f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
         )
         return NS_WAIT_DAILY_TIMES
-
-    pattern = {"type": "daily", "times": times}
-    return await _newschedule_finalize(update, context, pattern)
+    return await _newschedule_finalize(update, context, {"type": "daily", "times": times})
 
 
 async def newschedule_set_weekly_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     days = _parse_weekdays_csv(update.message.text or "")
     if days is None:
-        await update.message.reply_text(
-            "Invalid weekdays. Use names like: monday,tuesday,wednesday"
-        )
+        await update.message.reply_text("Invalid weekdays. Use names like: monday,tuesday,friday")
         return NS_WAIT_WEEKLY_DAYS
-
     context.user_data["ns_days"] = days
     tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
     await update.message.reply_text(
         f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
-        "Example: 12:00\n"
-        "Tip: change your default timezone with /settimezone."
+        "Example: 12:00"
     )
     return NS_WAIT_WEEKLY_TIMES
 
@@ -353,7 +556,6 @@ async def newschedule_set_weekly_times(update: Update, context: ContextTypes.DEF
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     times = _parse_times_csv(update.message.text or "")
     if times is None:
         tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
@@ -361,575 +563,57 @@ async def newschedule_set_weekly_times(update: Update, context: ContextTypes.DEF
             f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
         )
         return NS_WAIT_WEEKLY_TIMES
-
     days = context.user_data.get("ns_days") or []
-    pattern = {"type": "weekly", "days": days, "times": times}
-    return await _newschedule_finalize(update, context, pattern)
+    return await _newschedule_finalize(update, context, {"type": "weekly", "days": days, "times": times})
 
 
 async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TYPE, pattern: dict) -> int:
     if update.message is None or update.effective_user is None:
         return ConversationHandler.END
-
     ok, reason = validate_schedule_pattern(pattern)
     if not ok:
         await update.message.reply_text(f"Schedule pattern invalid: {reason}")
         return ConversationHandler.END
-
-    _raw_channel_id = context.user_data.get("ns_channel_db_id")
-    if _raw_channel_id is None:
-        await update.message.reply_text("Session expired. Please start over with /newschedule.")
+    raw_ch = context.user_data.get("ns_channel_db_id")
+    if raw_ch is None:
+        await update.message.reply_text("Session expired. Use /schedules to start again.")
         return ConversationHandler.END
-    channel_db_id = int(_raw_channel_id)
+    channel_db_id = int(raw_ch)
     name = str(context.user_data.get("ns_name"))
-    timezone_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
-
+    tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
     schedule = await db.create_schedule(
         channel_db_id=channel_db_id,
         name=name,
         pattern=pattern,
-        timezone_name=timezone_name,
+        timezone_name=tz_name,
         state="paused",
     )
-
-    channel_name = str(context.user_data.get("ns_channel_name") or channel_db_id)
-
-    # Automatically select the new schedule.
     await db.set_user_context(
         user_id=update.effective_user.id,
         selected_channel_id=channel_db_id,
         selected_schedule_id=int(schedule["id"]),
     )
-
-    segments = [
+    text, entities = render([
         Segment("Schedule created.\n"),
         Segment("ID: "),
         Segment(str(schedule["id"]), code=True),
-        Segment("\nChannel: "),
-        Segment(channel_name),
-        Segment("\nPattern: "),
-        Segment(_pattern_summary(pattern, tz_name=timezone_name)),
-        Segment("\nState: paused\n"),
-        Segment("Next steps: /resumeschedule "),
-        Segment(str(schedule["id"]), code=True),
-        Segment("\nQueue: /viewqueue "),
-        Segment(str(schedule["id"]), code=True),
-        Segment("\nAdd posts: /bulk "),
-        Segment(str(schedule["id"]), code=True),
-        Segment("\n\n"),
-        *selection_segments(await db.get_user_context_details(update.effective_user.id)),
-    ]
-    text, entities = render(segments)
+        Segment(f"\nPattern: {_pattern_summary(pattern, tz_name=tz_name)}\n"),
+        Segment("State: paused — use /schedules to resume when ready."),
+    ])
     await update.message.reply_text(text, entities=entities)
-
-    _clear_new_schedule_state(context)
-    logger.info(
-        "User %s created schedule id=%s for channel_db_id=%s",
-        update.effective_user.id,
-        schedule["id"],
-        channel_db_id,
-    )
+    _clear_ns_state(context)
+    logger.info("User %s created schedule %s", update.effective_user.id, schedule["id"])
     return ConversationHandler.END
 
 
-async def schedule_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await ensure_user_record(update, context)
-    _clear_new_schedule_state(context)
-    _clear_edit_schedule_state(context)
-    if update.message:
-        await update.message.reply_text("Cancelled.")
-    return ConversationHandler.END
-
-
-def _clear_new_schedule_state(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for key in list(context.user_data.keys()):
-        if key.startswith("ns_"):
-            context.user_data.pop(key, None)
-
-
-def _clear_edit_schedule_state(context: ContextTypes.DEFAULT_TYPE) -> None:
-    for key in list(context.user_data.keys()):
-        if key.startswith("es_"):
-            context.user_data.pop(key, None)
-
-
-new_schedule_conversation_handler = ConversationHandler(
-    entry_points=[CommandHandler("newschedule", newschedule_start)],
-    states={
-        NS_WAIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, newschedule_set_name)],
-        NS_WAIT_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, newschedule_set_type)],
-        NS_WAIT_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, newschedule_set_interval)],
-        NS_WAIT_DAILY_TIMES: [MessageHandler(filters.TEXT & ~filters.COMMAND, newschedule_set_daily_times)],
-        NS_WAIT_WEEKLY_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, newschedule_set_weekly_days)],
-        NS_WAIT_WEEKLY_TIMES: [MessageHandler(filters.TEXT & ~filters.COMMAND, newschedule_set_weekly_times)],
-    },
-    fallbacks=[CommandHandler("cancel", schedule_cancel)],
-)
-
-
-# --- Non-conversation schedule commands -------------------------------------
-
-
-async def list_schedules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_record(update, context)
-
-    if update.message is None or update.effective_user is None:
-        return
-
-    channel: dict | None = None
-    telegram_channel_id: str | None = None
-
-    if context.args and len(context.args) == 1:
-        telegram_channel_id = await resolve_channel_id(context, context.args[0])
-        if telegram_channel_id is None:
-            await update.message.reply_text("Could not resolve that channel.")
-            return
-
-        channel = await db_access.get_channel_by_telegram_id_for_user(update.effective_user.id, telegram_channel_id)
-        if channel is None:
-            await update.message.reply_text("Channel not found or not owned by you.")
-            return
-
-        await db.set_user_context(
-            user_id=update.effective_user.id,
-            selected_channel_id=int(channel["id"]),
-            selected_schedule_id=None,
-        )
-    else:
-        user_ctx = await db.get_user_context(update.effective_user.id)
-        selected_channel_id = user_ctx.get("selected_channel_id")
-        if selected_channel_id is None:
-            await update.message.reply_text(
-                "Usage: /listschedules <channel_id>\n"
-                "Example: /listschedules -1001234567890\n\n"
-                "Tip: select a default channel first:\n"
-                "- /listchannels\n"
-                "- /selectchannel <channel_id>"
-            )
-            return
-
-        channel = await db_access.get_channel_by_id_for_user(update.effective_user.id, int(selected_channel_id))
-        if channel is None:
-            await update.message.reply_text(
-                "Your selected channel is missing or not owned by you.\n"
-                "Use /listchannels and /selectchannel again."
-            )
-            return
-
-        telegram_channel_id = str(channel["channel_id"])
-
-    schedules = await db.get_channel_schedules(int(channel["id"]))
-    if not schedules:
-        details = await db.get_user_context_details(update.effective_user.id)
-        msg_text, msg_entities = render(
-            [
-                Segment("No schedules for this channel yet. Use /newschedule to create one.\n\n"),
-                *selection_segments(details),
-            ]
-        )
-        await update.message.reply_text(msg_text, entities=msg_entities)
-        return
-
-    segments: list[Segment] = [
-        Segment("Schedules for channel '"),
-        Segment(str(channel["channel_name"])),
-        Segment("' ("),
-        Segment(str(telegram_channel_id), code=True),
-        Segment("):\n"),
-    ]
-    for s in schedules:
-        pattern = s.get("pattern") or {}
-        tz_name = str(s.get("timezone") or _default_timezone_name())
-        segments += [
-            Segment("- "),
-            Segment(str(s["id"]), code=True),
-            Segment(": "),
-            Segment(str(s["name"])),
-            Segment(" ["),
-            Segment(str(s["state"])),
-            Segment("] "),
-            Segment(_pattern_summary(pattern, tz_name=tz_name)),
-            Segment("\n"),
-        ]
-
-    segments += [Segment("\nTip: set a default schedule with /selectschedule "), Segment(str(schedules[0]["id"]), code=True), Segment(".\n\n")]
-    segments += selection_segments(await db.get_user_context_details(update.effective_user.id))
-
-    text, entities = render(segments)
-    await update.message.reply_text(text, entities=entities)
-
-
-async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set a schedule's timezone (used for daily/weekly interpretation and display)."""
-    await ensure_user_record(update, context)
-
-    if update.message is None or update.effective_user is None:
-        return
-
-    user_id = update.effective_user.id
-
-    schedule_id: int | None = None
-    tz_arg: str | None = None
-
-    if len(context.args) == 2:
-        schedule_id = _parse_schedule_id(context.args[0])
-        tz_arg = context.args[1]
-    elif len(context.args) == 1:
-        tz_arg = context.args[0]
-        user_ctx = await db.get_user_context(user_id)
-        raw = user_ctx.get("selected_schedule_id")
-        schedule_id = int(raw) if raw is not None else None
-    else:
-        tz_default = await _effective_user_timezone_name(user_id)
-        text, entities = render(
-            [
-                Segment("Usage: "),
-                Segment("/setscheduletimezone"),
-                Segment(" "),
-                Segment("<schedule_id>", code=True),
-                Segment(" "),
-                Segment("<timezone>", code=True),
-                Segment("\nTip: if you have a selected schedule, you can omit <schedule_id>:\n"),
-                Segment("/setscheduletimezone"),
-                Segment(" "),
-                Segment(tz_default, code=True),
-            ]
-        )
-        await update.message.reply_text(text, entities=entities)
-        return
-
-    if schedule_id is None:
-        await update.message.reply_text(
-            "No schedule selected.\n"
-            "Usage: /setscheduletimezone <schedule_id> <timezone>\n"
-            "Tip: select a schedule first with /selectschedule <schedule_id>."
-        )
-        return
-
-    schedule = await db.get_schedule_for_user(user_id, schedule_id)
-    if schedule is None:
-        await update.message.reply_text("Schedule not found or not owned by you.")
-        return
-
-    raw_tz = (tz_arg or "").strip()
-    if not raw_tz:
-        await update.message.reply_text("Timezone cannot be empty.")
-        return
-
-    if raw_tz.lower() in {"default", "reset", "clear"}:
-        tz_name = await _effective_user_timezone_name(user_id)
-    else:
-        tz_name = raw_tz
-
-    if not _is_valid_timezone_name(tz_name):
-        text, entities = render(
-            [
-                Segment("Unknown timezone: "),
-                Segment(tz_name, code=True),
-                Segment("\nUse an IANA timezone name like "),
-                Segment("Europe/Amsterdam", code=True),
-                Segment(", "),
-                Segment("UTC", code=True),
-                Segment("."),
-            ]
-        )
-        await update.message.reply_text(text, entities=entities)
-        return
-
-    old_tz = str(schedule.get("timezone") or _default_timezone_name())
-    await db.update_schedule_timezone(schedule_id, timezone_name=tz_name)
-
-    text, entities = render(
-        [
-            Segment("Schedule "),
-            Segment(str(schedule_id), code=True),
-            Segment(" timezone updated: "),
-            Segment(old_tz, code=True),
-            Segment(" → "),
-            Segment(tz_name, code=True),
-            Segment(".\n\n"),
-            Segment("Note: daily/weekly schedule times are interpreted in the schedule timezone.\n"),
-            Segment("Preview with "),
-            Segment("/testschedule"),
-            Segment("."),
-        ]
-    )
-    await update.message.reply_text(text, entities=entities)
-
-
-async def pause_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_record(update, context)
-
-    if update.message is None or update.effective_user is None:
-        return
-
-    schedule_id: int | None = None
-    used_selected = False
-    if context.args and len(context.args) == 1:
-        schedule_id = _parse_schedule_id(context.args[0])
-        if schedule_id is None:
-            await update.message.reply_text("Invalid schedule id.")
-            return
-    else:
-        user_ctx = await db.get_user_context(update.effective_user.id)
-        raw = user_ctx.get("selected_schedule_id")
-        schedule_id = int(raw) if raw is not None else None
-        used_selected = True
-
-    if schedule_id is None:
-        await update.message.reply_text(
-            "Usage: /pauseschedule <schedule_id>\n"
-            "Tip: select a default schedule with /selectschedule <schedule_id>."
-        )
-        return
-
-    schedule = await db.get_schedule_for_user(update.effective_user.id, schedule_id)
-    if schedule is None:
-        await update.message.reply_text("Schedule not found or not owned by you.")
-        return
-
-    if not used_selected:
-        await db.set_user_context(
-            user_id=update.effective_user.id,
-            selected_channel_id=int(schedule["channel_id"]),
-            selected_schedule_id=schedule_id,
-        )
-
-    await db.update_schedule_state(schedule_id, "paused")
-    details = await db.get_user_context_details(update.effective_user.id)
-    text, entities = render(
-        [
-            Segment("Schedule "),
-            Segment(str(schedule_id), code=True),
-            Segment(" paused.\n\n"),
-            *selection_segments(details),
-        ]
-    )
-    await update.message.reply_text(text, entities=entities)
-
-
-async def resume_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_record(update, context)
-
-    if update.message is None or update.effective_user is None:
-        return
-
-    schedule_id: int | None = None
-    used_selected = False
-    if context.args and len(context.args) == 1:
-        schedule_id = _parse_schedule_id(context.args[0])
-        if schedule_id is None:
-            await update.message.reply_text("Invalid schedule id.")
-            return
-    else:
-        user_ctx = await db.get_user_context(update.effective_user.id)
-        raw = user_ctx.get("selected_schedule_id")
-        schedule_id = int(raw) if raw is not None else None
-        used_selected = True
-
-    if schedule_id is None:
-        await update.message.reply_text(
-            "Usage: /resumeschedule <schedule_id>\n"
-            "Tip: select a default schedule with /selectschedule <schedule_id>."
-        )
-        return
-
-    schedule = await db.get_schedule_for_user(update.effective_user.id, schedule_id)
-    if schedule is None:
-        await update.message.reply_text("Schedule not found or not owned by you.")
-        return
-
-    if not used_selected:
-        await db.set_user_context(
-            user_id=update.effective_user.id,
-            selected_channel_id=int(schedule["channel_id"]),
-            selected_schedule_id=schedule_id,
-        )
-
-    queue_count = await db.get_queue_count(schedule_id)
-    if queue_count == 0:
-        await update.message.reply_text(
-            "The queue for this schedule is empty — upload some posts with /bulk first, "
-            "then resume."
-        )
-        return
-
-    await db.update_schedule_state(schedule_id, "active")
-    details = await db.get_user_context_details(update.effective_user.id)
-    text, entities = render(
-        [
-            Segment("Schedule "),
-            Segment(str(schedule_id), code=True),
-            Segment(" resumed.\n\n"),
-            *selection_segments(details),
-        ]
-    )
-    await update.message.reply_text(text, entities=entities)
-
-
-async def delete_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_record(update, context)
-
-    if update.message is None or update.effective_user is None:
-        return
-
-    schedule_id: int | None = None
-    used_selected = False
-    if context.args and len(context.args) == 1:
-        schedule_id = _parse_schedule_id(context.args[0])
-        if schedule_id is None:
-            await update.message.reply_text("Invalid schedule id.")
-            return
-    else:
-        user_ctx = await db.get_user_context(update.effective_user.id)
-        raw = user_ctx.get("selected_schedule_id")
-        schedule_id = int(raw) if raw is not None else None
-        used_selected = True
-
-    if schedule_id is None:
-        await update.message.reply_text(
-            "Usage: /deleteschedule <schedule_id>\n"
-            "Tip: select a default schedule with /selectschedule <schedule_id>."
-        )
-        return
-
-    schedule = await db.get_schedule_for_user(update.effective_user.id, schedule_id)
-    if schedule is None:
-        await update.message.reply_text("Schedule not found or not owned by you.")
-        return
-
-    if not used_selected:
-        await db.set_user_context(
-            user_id=update.effective_user.id,
-            selected_channel_id=int(schedule["channel_id"]),
-            selected_schedule_id=schedule_id,
-        )
-
-    await db.delete_schedule(schedule_id)
-    details = await db.get_user_context_details(update.effective_user.id)
-    text, entities = render(
-        [
-            Segment("Schedule "),
-            Segment(str(schedule_id), code=True),
-            Segment(" deleted.\n\n"),
-            *selection_segments(details),
-        ]
-    )
-    await update.message.reply_text(text, entities=entities)
-
-
-async def copy_schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await ensure_user_record(update, context)
-
-    if update.message is None or update.effective_user is None:
-        return
-
-    if not context.args or len(context.args) != 2:
-        await update.message.reply_text("Usage: /copyschedule <schedule_id> <target_channel_id>")
-        return
-
-    source_id = _parse_schedule_id(context.args[0])
-    if source_id is None:
-        await update.message.reply_text("Invalid source schedule id.")
-        return
-
-    source = await db.get_schedule_for_user(update.effective_user.id, source_id)
-    if source is None:
-        await update.message.reply_text("Source schedule not found or not owned by you.")
-        return
-
-    target_channel_id = await resolve_channel_id(context, context.args[1])
-    if target_channel_id is None:
-        await update.message.reply_text("Could not resolve target channel.")
-        return
-
-    target_channel = await db_access.get_channel_by_telegram_id_for_user(update.effective_user.id, target_channel_id)
-    if target_channel is None:
-        await update.message.reply_text("Target channel not found or not owned by you.")
-        return
-
-    new_schedule = await db.create_schedule(
-        channel_db_id=int(target_channel["id"]),
-        name=str(source["name"]),
-        pattern=dict(source["pattern"]),
-        timezone_name=str(source.get("timezone") or _default_timezone_name()),
-        state="paused",
-    )
-
-    text, entities = render(
-        [
-            Segment("Schedule copied.\nNew schedule ID: "),
-            Segment(str(new_schedule["id"]), code=True),
-            Segment("\nState: paused"),
-        ]
-    )
-    await update.message.reply_text(text, entities=entities)
-
-
-# --- /editschedule conversation ---------------------------------------------
-
-
-async def editschedule_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    await ensure_user_record(update, context)
-    if update.message is None or update.effective_user is None:
-        return ConversationHandler.END
-
-    schedule_id: int | None = None
-    used_selected = False
-    if context.args and len(context.args) == 1:
-        schedule_id = _parse_schedule_id(context.args[0])
-        if schedule_id is None:
-            await update.message.reply_text("Invalid schedule id.")
-            return ConversationHandler.END
-    else:
-        user_ctx = await db.get_user_context(update.effective_user.id)
-        raw = user_ctx.get("selected_schedule_id")
-        schedule_id = int(raw) if raw is not None else None
-        used_selected = True
-
-    if schedule_id is None:
-        await update.message.reply_text(
-            "Usage: /editschedule <schedule_id>\n"
-            "Tip: select a default schedule with /selectschedule <schedule_id>."
-        )
-        return ConversationHandler.END
-
-    schedule = await db.get_schedule_for_user(update.effective_user.id, schedule_id)
-    if schedule is None:
-        await update.message.reply_text("Schedule not found or not owned by you.")
-        return ConversationHandler.END
-
-    if not used_selected:
-        await db.set_user_context(
-            user_id=update.effective_user.id,
-            selected_channel_id=int(schedule["channel_id"]),
-            selected_schedule_id=schedule_id,
-        )
-
-    context.user_data["es_schedule_id"] = schedule_id
-    context.user_data["es_current_name"] = schedule.get("name")
-    context.user_data["es_current_pattern"] = schedule.get("pattern")
-    context.user_data["es_timezone"] = str(schedule.get("timezone") or _default_timezone_name())
-
-    details = await db.get_user_context_details(update.effective_user.id)
-    text, entities = render(
-        [
-            Segment("Editing schedule "),
-            Segment(str(schedule_id), code=True),
-            Segment(".\n\n"),
-            *selection_segments(details),
-            Segment("\n\nWhat do you want to edit? Reply with: name or pattern\nOr /cancel to stop."),
-        ]
-    )
-    await update.message.reply_text(text, entities=entities)
-    return ES_WAIT_FIELD
-
+# ---------------------------------------------------------------------------
+# Edit-schedule wizard (ES_*) — embedded in schedules_conversation_handler
+# ---------------------------------------------------------------------------
 
 async def editschedule_choose_field(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     choice = (update.message.text or "").strip().lower()
     if choice == "name":
         await update.message.reply_text("Enter new schedule name.")
@@ -940,8 +624,7 @@ async def editschedule_choose_field(update: Update, context: ContextTypes.DEFAUL
             "Reply with one of those words."
         )
         return ES_WAIT_TYPE
-
-    await update.message.reply_text("Invalid choice. Reply with: name or pattern")
+    await update.message.reply_text("Reply with: name or pattern")
     return ES_WAIT_FIELD
 
 
@@ -949,21 +632,19 @@ async def editschedule_set_name(update: Update, context: ContextTypes.DEFAULT_TY
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     name = (update.message.text or "").strip()
     if not name:
         await update.message.reply_text("Name cannot be empty. Enter a name.")
         return ES_WAIT_NAME
-
-    _raw_schedule_id = context.user_data.get("es_schedule_id")
-    if _raw_schedule_id is None:
-        await update.message.reply_text("Session expired. Please start over with /editschedule.")
+    raw_id = context.user_data.get("es_schedule_id")
+    if raw_id is None:
+        await update.message.reply_text("Session expired. Use /schedules to start again.")
         return ConversationHandler.END
-    schedule_id = int(_raw_schedule_id)
-    await db.update_schedule_name(schedule_id, name=name)
-    text, entities = render([Segment("Schedule "), Segment(str(schedule_id), code=True), Segment(" renamed.")])
+    s_id = int(raw_id)
+    await db.update_schedule_name(s_id, name=name)
+    text, entities = render([Segment("Schedule "), Segment(str(s_id), code=True), Segment(" renamed.")])
     await update.message.reply_text(text, entities=entities)
-    _clear_edit_schedule_state(context)
+    _clear_es_state(context)
     return ConversationHandler.END
 
 
@@ -971,55 +652,42 @@ async def editschedule_set_type(update: Update, context: ContextTypes.DEFAULT_TY
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     schedule_type = (update.message.text or "").strip().lower()
     if schedule_type not in {"interval", "daily", "weekly"}:
         await update.message.reply_text("Invalid type. Reply with: interval, daily, weekly")
         return ES_WAIT_TYPE
-
     context.user_data["es_type"] = schedule_type
-
     if schedule_type == "interval":
         await update.message.reply_text("Enter interval (examples: 1h, 30m, 90).")
         return ES_WAIT_INTERVAL
-
+    tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
     if schedule_type == "daily":
-        tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
         await update.message.reply_text(
             f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
-            "Example: 09:00,16:00\n"
-            "Tip: schedule timezone is set when the schedule is created."
+            "Example: 09:00,16:00"
         )
         return ES_WAIT_DAILY_TIMES
-
-    if schedule_type == "weekly":
-        await update.message.reply_text(
-            "Enter weekdays separated by commas.\n"
-            "Example: monday,tuesday,wednesday,thursday,friday"
-        )
-        return ES_WAIT_WEEKLY_DAYS
-
-    await update.message.reply_text("Invalid type. Reply with: interval, daily, weekly")
-    return ES_WAIT_TYPE
+    await update.message.reply_text(
+        "Enter weekdays separated by commas.\n"
+        "Example: monday,tuesday,friday"
+    )
+    return ES_WAIT_WEEKLY_DAYS
 
 
 async def editschedule_set_interval(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     parsed = _parse_interval_input(update.message.text or "")
     if parsed is None:
         await update.message.reply_text("Invalid interval. Try: 1h, 30m, or 90")
         return ES_WAIT_INTERVAL
-
     hours, minutes = parsed
     pattern: dict = {"type": "interval"}
     if hours:
         pattern["hours"] = hours
     if minutes:
         pattern["minutes"] = minutes
-
     return await _editschedule_finalize(update, context, pattern)
 
 
@@ -1027,7 +695,6 @@ async def editschedule_set_daily_times(update: Update, context: ContextTypes.DEF
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     times = _parse_times_csv(update.message.text or "")
     if times is None:
         tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
@@ -1035,29 +702,22 @@ async def editschedule_set_daily_times(update: Update, context: ContextTypes.DEF
             f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
         )
         return ES_WAIT_DAILY_TIMES
-
-    pattern = {"type": "daily", "times": times}
-    return await _editschedule_finalize(update, context, pattern)
+    return await _editschedule_finalize(update, context, {"type": "daily", "times": times})
 
 
 async def editschedule_set_weekly_days(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     days = _parse_weekdays_csv(update.message.text or "")
     if days is None:
-        await update.message.reply_text(
-            "Invalid weekdays. Use names like: monday,tuesday,wednesday"
-        )
+        await update.message.reply_text("Invalid weekdays. Use names like: monday,tuesday,friday")
         return ES_WAIT_WEEKLY_DAYS
-
     context.user_data["es_days"] = days
     tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
     await update.message.reply_text(
         f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
-        "Example: 12:00\n"
-        "Tip: schedule timezone is set when the schedule is created."
+        "Example: 12:00"
     )
     return ES_WAIT_WEEKLY_TIMES
 
@@ -1066,7 +726,6 @@ async def editschedule_set_weekly_times(update: Update, context: ContextTypes.DE
     await ensure_user_record(update, context)
     if update.message is None:
         return ConversationHandler.END
-
     times = _parse_times_csv(update.message.text or "")
     if times is None:
         tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
@@ -1074,55 +733,118 @@ async def editschedule_set_weekly_times(update: Update, context: ContextTypes.DE
             f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
         )
         return ES_WAIT_WEEKLY_TIMES
-
     days = context.user_data.get("es_days") or []
-    pattern = {"type": "weekly", "days": days, "times": times}
-    return await _editschedule_finalize(update, context, pattern)
+    return await _editschedule_finalize(update, context, {"type": "weekly", "days": days, "times": times})
 
 
 async def _editschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TYPE, pattern: dict) -> int:
     if update.message is None or update.effective_user is None:
         return ConversationHandler.END
-
     ok, reason = validate_schedule_pattern(pattern)
     if not ok:
         await update.message.reply_text(f"Schedule pattern invalid: {reason}")
         return ConversationHandler.END
-
-    _raw_schedule_id = context.user_data.get("es_schedule_id")
-    if _raw_schedule_id is None:
-        await update.message.reply_text("Session expired. Please start over with /editschedule.")
+    raw_id = context.user_data.get("es_schedule_id")
+    if raw_id is None:
+        await update.message.reply_text("Session expired. Use /schedules to start again.")
         return ConversationHandler.END
-    schedule_id = int(_raw_schedule_id)
-    await db.update_schedule_pattern(schedule_id, pattern)
-
+    s_id = int(raw_id)
+    await db.update_schedule_pattern(s_id, pattern)
     tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
-    text, entities = render(
-        [
-            Segment("Schedule "),
-            Segment(str(schedule_id), code=True),
-            Segment(" updated.\nPattern: "),
-            Segment(_pattern_summary(pattern, tz_name=tz_name)),
-        ]
-    )
+    text, entities = render([
+        Segment("Schedule "),
+        Segment(str(s_id), code=True),
+        Segment(f" updated.\nPattern: {_pattern_summary(pattern, tz_name=tz_name)}"),
+    ])
     await update.message.reply_text(text, entities=entities)
-
-    _clear_edit_schedule_state(context)
-    logger.info("User %s updated schedule id=%s", update.effective_user.id, schedule_id)
+    _clear_es_state(context)
+    logger.info("User %s updated schedule %s", update.effective_user.id, s_id)
     return ConversationHandler.END
 
 
-edit_schedule_conversation_handler = ConversationHandler(
-    entry_points=[CommandHandler("editschedule", editschedule_start)],
+# ---------------------------------------------------------------------------
+# Shared cancel fallback
+# ---------------------------------------------------------------------------
+
+async def schedule_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    _clear_ns_state(context)
+    _clear_es_state(context)
+    context.user_data.pop("sm_settp_schedule_id", None)
+    if update.message:
+        await update.message.reply_text("Cancelled.")
+    return ConversationHandler.END
+
+
+# ---------------------------------------------------------------------------
+# Legacy command (kept for tests / power users; not registered in bot.py)
+# ---------------------------------------------------------------------------
+
+async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set a schedule's timezone via command args (legacy, power-user)."""
+    await ensure_user_record(update, context)
+    if update.message is None or update.effective_user is None:
+        return
+    user_id = update.effective_user.id
+    schedule_id: int | None = None
+    tz_arg: str | None = None
+    if len(context.args) == 2:
+        schedule_id = _parse_schedule_id(context.args[0])
+        tz_arg = context.args[1]
+    elif len(context.args) == 1:
+        tz_arg = context.args[0]
+        raw = (await db.get_user_context(user_id)).get("selected_schedule_id")
+        schedule_id = int(raw) if raw is not None else None
+    else:
+        await update.message.reply_text(
+            "Usage: /setscheduletimezone <schedule_id> <timezone>\n"
+            "Or use /schedules > Set TZ for the guided flow."
+        )
+        return
+    if schedule_id is None:
+        await update.message.reply_text(
+            "No schedule selected. Use /select first, or provide a schedule_id."
+        )
+        return
+    schedule = await db.get_schedule_for_user(user_id, schedule_id)
+    if schedule is None:
+        await update.message.reply_text("Schedule not found or not owned by you.")
+        return
+    raw_tz = (tz_arg or "").strip()
+    if raw_tz.lower() in {"default", "reset", "clear"}:
+        raw_tz = await _effective_user_timezone_name(user_id)
+    if not _is_valid_timezone_name(raw_tz):
+        await update.message.reply_text(f"Unknown timezone: {raw_tz!r}")
+        return
+    await db.update_schedule_timezone(schedule_id, timezone_name=raw_tz)
+    await update.message.reply_text(f"Schedule {schedule_id} timezone set to {raw_tz}.")
+
+
+# ---------------------------------------------------------------------------
+# The unified ConversationHandler
+# ---------------------------------------------------------------------------
+
+_MSG_HANDLER = filters.TEXT & ~filters.COMMAND
+
+schedules_conversation_handler = ConversationHandler(
+    entry_points=[CommandHandler("schedules", schedules_command)],
     states={
-        ES_WAIT_FIELD: [MessageHandler(filters.TEXT & ~filters.COMMAND, editschedule_choose_field)],
-        ES_WAIT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, editschedule_set_name)],
-        ES_WAIT_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, editschedule_set_type)],
-        ES_WAIT_INTERVAL: [MessageHandler(filters.TEXT & ~filters.COMMAND, editschedule_set_interval)],
-        ES_WAIT_DAILY_TIMES: [MessageHandler(filters.TEXT & ~filters.COMMAND, editschedule_set_daily_times)],
-        ES_WAIT_WEEKLY_DAYS: [MessageHandler(filters.TEXT & ~filters.COMMAND, editschedule_set_weekly_days)],
-        ES_WAIT_WEEKLY_TIMES: [MessageHandler(filters.TEXT & ~filters.COMMAND, editschedule_set_weekly_times)],
+        SM_SHOWING: [CallbackQueryHandler(schedules_callback, pattern=r"^sm:")],
+        SM_WAIT_TZ_INPUT: [MessageHandler(_MSG_HANDLER, schedules_tz_handler)],
+        # New-schedule wizard
+        NS_WAIT_NAME: [MessageHandler(_MSG_HANDLER, newschedule_set_name)],
+        NS_WAIT_TYPE: [MessageHandler(_MSG_HANDLER, newschedule_set_type)],
+        NS_WAIT_INTERVAL: [MessageHandler(_MSG_HANDLER, newschedule_set_interval)],
+        NS_WAIT_DAILY_TIMES: [MessageHandler(_MSG_HANDLER, newschedule_set_daily_times)],
+        NS_WAIT_WEEKLY_DAYS: [MessageHandler(_MSG_HANDLER, newschedule_set_weekly_days)],
+        NS_WAIT_WEEKLY_TIMES: [MessageHandler(_MSG_HANDLER, newschedule_set_weekly_times)],
+        # Edit-schedule wizard
+        ES_WAIT_FIELD: [MessageHandler(_MSG_HANDLER, editschedule_choose_field)],
+        ES_WAIT_NAME: [MessageHandler(_MSG_HANDLER, editschedule_set_name)],
+        ES_WAIT_TYPE: [MessageHandler(_MSG_HANDLER, editschedule_set_type)],
+        ES_WAIT_INTERVAL: [MessageHandler(_MSG_HANDLER, editschedule_set_interval)],
+        ES_WAIT_DAILY_TIMES: [MessageHandler(_MSG_HANDLER, editschedule_set_daily_times)],
+        ES_WAIT_WEEKLY_DAYS: [MessageHandler(_MSG_HANDLER, editschedule_set_weekly_days)],
+        ES_WAIT_WEEKLY_TIMES: [MessageHandler(_MSG_HANDLER, editschedule_set_weekly_times)],
     },
     fallbacks=[CommandHandler("cancel", schedule_cancel)],
 )
-
