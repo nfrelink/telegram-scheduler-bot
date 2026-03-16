@@ -59,11 +59,13 @@ def _media_group_is_forwarded(media_group_data: object) -> bool:
 # Format: qv:go:{schedule_id}:{offset}
 #         qv:da:{post_id}:{schedule_id}:{offset}   (delete ask)
 #         qv:do:{post_id}:{schedule_id}:{offset}   (delete confirmed)
+#         qv:al:{post_id}                           (show full album)
 #         qv:noop                                    (non-interactive position button)
 # ---------------------------------------------------------------------------
 _CB_GO = "qv:go"
 _CB_DEL_ASK = "qv:da"
 _CB_DEL_OK = "qv:do"
+_CB_ALBUM = "qv:al"
 _CB_NOOP = "qv:noop"
 
 
@@ -92,6 +94,42 @@ def _first_media_from_group(post: dict[str, Any]) -> tuple[str, str] | None:
     except Exception:
         pass
     return None
+
+
+def _all_media_from_group(
+    post: dict[str, Any],
+) -> list[InputMediaPhoto | InputMediaVideo | InputMediaDocument]:
+    """Return InputMedia objects for every item in a media_group post that has a file_id."""
+    media_group_data = post.get("media_group_data")
+    if not media_group_data:
+        return []
+    try:
+        items = json.loads(media_group_data)
+    except Exception:
+        return []
+    result: list[InputMediaPhoto | InputMediaVideo | InputMediaDocument] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        fid = item.get("file_id")
+        mt = item.get("media_type")
+        if not fid or mt not in ("photo", "video", "document"):
+            continue
+        cap = (item.get("caption") or "").strip() or None
+        cap_entities_raw = item.get("caption_entities")
+        cap_entities: list | None = None
+        if cap_entities_raw:
+            try:
+                cap_entities = json.loads(cap_entities_raw) if isinstance(cap_entities_raw, str) else cap_entities_raw
+            except Exception:
+                cap_entities = None
+        result.append(_to_input_media(
+            file_id=str(fid),
+            media_type=str(mt),
+            caption=cap,
+            caption_entities=cap_entities,
+        ))
+    return result
 
 
 def _to_input_media(
@@ -175,6 +213,7 @@ def _queue_nav_keyboard(
     offset: int,
     total: int,
     post_id: int,
+    album_count: int = 0,
 ) -> InlineKeyboardMarkup:
     prev_btn = (
         InlineKeyboardButton("< Prev", callback_data=f"{_CB_GO}:{schedule_id}:{offset - 1}")
@@ -191,7 +230,14 @@ def _queue_nav_keyboard(
         "Delete this post",
         callback_data=f"{_CB_DEL_ASK}:{post_id}:{schedule_id}:{offset}",
     )
-    return InlineKeyboardMarkup([[prev_btn, pos_btn, next_btn], [delete_btn]])
+    rows: list[list[InlineKeyboardButton]] = [[prev_btn, pos_btn, next_btn]]
+    if album_count > 1:
+        rows.append([InlineKeyboardButton(
+            f"Show album ({album_count} items)",
+            callback_data=f"{_CB_ALBUM}:{post_id}",
+        )])
+    rows.append([delete_btn])
+    return InlineKeyboardMarkup(rows)
 
 
 def _queue_confirm_keyboard(
@@ -294,6 +340,7 @@ async def _build_queue_page(
 
     segments.append(Segment(f"\nPost {offset + 1} of {total}\n"))
 
+    album_count = 0
     if media_type == "media_group":
         try:
             album_count = len(json.loads(post.get("media_group_data") or "[]"))
@@ -323,6 +370,7 @@ async def _build_queue_page(
         offset=offset,
         total=total,
         post_id=post_id,
+        album_count=album_count,
     )
     return _QueuePage(
         text=text,
@@ -452,6 +500,42 @@ async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_T
                     await query.edit_message_text(page.text, entities=page.entities, reply_markup=page.keyboard)
                 except Exception:
                     pass
+        return
+
+    if data.startswith(f"{_CB_ALBUM}:"):
+        try:
+            post_id = int(parts[2])
+        except (IndexError, ValueError):
+            await query.answer("Invalid data.", show_alert=True)
+            return
+
+        post = await db.get_queued_post_with_owner(post_id)
+        if post is None or int(post["owner_user_id"]) != user_id:
+            await query.answer("Post not found or not owned by you.", show_alert=True)
+            return
+
+        media_items = _all_media_from_group(post)
+        if not media_items:
+            await query.answer("No displayable media found in this album.", show_alert=True)
+            return
+
+        msg = query.message
+        if msg is None:
+            return
+
+        # Telegram allows 2–10 items per send_media_group.
+        chunk = media_items[:10]
+        truncated = len(media_items) > 10
+        try:
+            await context.bot.send_media_group(chat_id=msg.chat_id, media=chunk)
+            if truncated:
+                await context.bot.send_message(
+                    chat_id=msg.chat_id,
+                    text=f"Album has {len(media_items)} items; showing first 10.",
+                )
+        except Exception as exc:
+            logger.error("Failed to send album preview for post %s: %s", post_id, exc, exc_info=True)
+            await query.answer("Could not send album. Some items may be unavailable.", show_alert=True)
         return
 
     logger.warning("Unhandled queue browser callback data: %r", data)
