@@ -43,7 +43,7 @@ def _help_text() -> str:
         "- /removeforward <origin_channel_id> — Remove origin channel from allowlist\n"
         "- /clearforward — Clear forwarding allowlist\n"
         "\n"
-        "Note: forwarding only applies in /bulk when caption mode is 'preserve'.\n"
+        "Note: messages from allowlisted channels are always forwarded natively in /bulk, regardless of caption mode.\n"
         "\n"
         "Tip: when a channel/schedule is selected, many commands work without an explicit id.\n"
         "\n"
@@ -98,10 +98,7 @@ def _onboarding_segments() -> list[Segment]:
         Segment("\n\nOptional: configure forwarding allowlist with "),
         Segment("/forwarding"),
         Segment(" to preserve 'Forwarded from ...' attribution for selected source channels.\n"),
-        Segment("Forwarding is only applied during /bulk when caption mode is "),
-        Segment("preserve", code=True),
-        Segment("."),
-        Segment("\n"),
+        Segment("Messages from allowlisted channels are always forwarded natively in /bulk, regardless of caption mode.\n"),
     ]
 
 

@@ -50,7 +50,7 @@ def _state_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 def _get_caption_mode(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     mode = context.user_data.get("bulk_caption_mode")
-    if mode in {"preserve", "remove", "single"}:
+    if mode in {"remove", "single"}:
         return str(mode)
     return None
 
@@ -230,27 +230,27 @@ def _message_to_collected_item(
     forward_origin_chat_id: int | None = None
     forward_origin_message_id: int | None = None
 
-    # Forwarding is only supported in preserve mode.
-    # For media groups, we record per-item forwarding metadata and later forward the whole album.
-    if caption_mode == "preserve":
-        allow = forward_origin_allowlist or set()
-        if allow:
-            origin_chat_id, origin_msg_id = _extract_forward_origin_channel(message)
-            if origin_chat_id is not None and origin_chat_id in allow:
-                chat = getattr(message, "chat", None)
-                msg_id = getattr(message, "message_id", None)
-                chat_id_raw = getattr(chat, "id", None) if chat is not None else None
-                if chat_id_raw is not None and msg_id is not None:
-                    try:
-                        forward_from_chat_id = int(chat_id_raw)
-                        forward_from_message_id = int(msg_id)
-                        forward_origin_chat_id = int(origin_chat_id)
-                        forward_origin_message_id = int(origin_msg_id) if origin_msg_id is not None else None
-                    except (TypeError, ValueError):
-                        forward_from_chat_id = None
-                        forward_from_message_id = None
-                        forward_origin_chat_id = None
-                        forward_origin_message_id = None
+    # Check the allowlist regardless of caption mode. If the message was forwarded
+    # from an allowlisted channel, record the forwarding refs so the executor can
+    # use bot.forward_message() and preserve attribution at send time.
+    allow = forward_origin_allowlist or set()
+    if allow:
+        origin_chat_id, origin_msg_id = _extract_forward_origin_channel(message)
+        if origin_chat_id is not None and origin_chat_id in allow:
+            chat = getattr(message, "chat", None)
+            msg_id = getattr(message, "message_id", None)
+            chat_id_raw = getattr(chat, "id", None) if chat is not None else None
+            if chat_id_raw is not None and msg_id is not None:
+                try:
+                    forward_from_chat_id = int(chat_id_raw)
+                    forward_from_message_id = int(msg_id)
+                    forward_origin_chat_id = int(origin_chat_id)
+                    forward_origin_message_id = int(origin_msg_id) if origin_msg_id is not None else None
+                except (TypeError, ValueError):
+                    forward_from_chat_id = None
+                    forward_from_message_id = None
+                    forward_origin_chat_id = None
+                    forward_origin_message_id = None
 
     if message.photo:
         file_id = message.photo[-1].file_id
@@ -316,16 +316,12 @@ def _finalize_media_group_items(
     # Determine group caption behavior
     group_caption: str | None
     group_caption_entities: list[dict[str, Any]] | None
-    if caption_mode == "remove":
-        group_caption = None
-        group_caption_entities = None
-    elif caption_mode == "single":
+    if caption_mode == "single":
         group_caption = single_caption
         group_caption_entities = single_caption_entities
-    else:
-        first = next((i for i in items if i.caption), None)
-        group_caption = first.caption if first else None
-        group_caption_entities = first.caption_entities if first else None
+    else:  # remove
+        group_caption = None
+        group_caption_entities = None
 
     result: list[dict[str, Any]] = []
     for idx, item in enumerate(items):
@@ -401,15 +397,13 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         Segment(".\n\n"),
         *selection_segments(details),
         Segment("\n\nChoose caption mode by replying with one of:\n"),
-        Segment("- preserve (keep original captions)\n"),
-        Segment("- remove (remove all captions)\n"),
-        Segment("- single (use one caption for all posts; formatting is preserved)\n\n"),
+        Segment("- remove (strip all captions)\n"),
+        Segment("- single (use one caption for all posts)\n\n"),
         Segment(
-            "Tip: configure /forwarding if you want to preserve 'Forwarded from ...' attribution for specific source channels.\n"
-            "Forwarding only applies when caption mode is 'preserve'.\n"
+            "Tip: messages forwarded from channels in your /forwarding allowlist are always "
+            "sent as native Telegram forwards, regardless of caption mode.\n"
         ),
-        Segment("Tip: for 'single', you can format the caption message (links/code/etc) and the bot will keep it.\n"),
-        Segment("Tip: you can also paste [text](url) links and `inline code` and it will be preserved.\n\n"),
+        Segment("Tip: for 'single', formatting is preserved. You can use [text](url) links and `inline code`.\n\n"),
         Segment("Or /cancel to stop."),
     ]
     text, entities = render(segments)
@@ -426,8 +420,8 @@ async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TY
     # Backwards-compatible aliases (older prompts used these).
     if raw in {"markdown", "markdownv2", "md", "md2", "html"}:
         raw = "single"
-    if raw not in {"preserve", "remove", "single"}:
-        await update.message.reply_text("Invalid caption mode. Reply with: preserve, remove, single")
+    if raw not in {"remove", "single"}:
+        await update.message.reply_text("Invalid caption mode. Reply with: remove, single")
         return SELECTING_CAPTION_MODE
 
     context.user_data["bulk_caption_mode"] = raw

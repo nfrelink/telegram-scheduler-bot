@@ -27,8 +27,8 @@ async def forwarding_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not origins:
         segments = [
             Segment("Forwarding allowlist is empty.\n\n"),
-            Segment("When you use /bulk with caption mode 'preserve', forwarded messages from allowlisted channels\n"),
-            Segment("will be forwarded into your destination channel (preserving 'Forwarded from ...').\n\n"),
+            Segment("Messages forwarded from allowlisted channels during /bulk are always sent as native Telegram\n"),
+            Segment("forwards, preserving 'Forwarded from ...' attribution regardless of caption mode.\n\n"),
             Segment("Add one: /addforward <origin_channel_id>\n"),
             Segment("Remove one: /removeforward <origin_channel_id>\n"),
             Segment("Clear all: /clearforward\n"),
@@ -39,7 +39,7 @@ async def forwarding_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     segments: list[Segment] = [
         Segment("Forwarding allowlist (origin channel IDs):\n"),
-        Segment("Used only with /bulk when caption mode is 'preserve'.\n\n"),
+        Segment("Messages from these channels are always forwarded natively in /bulk.\n\n"),
     ]
     for cid in origins:
         segments += [Segment("- "), Segment(str(cid), code=True), Segment("\n")]
