@@ -6,6 +6,7 @@ import pytest
 
 from database import queries as db
 from database.connection import get_db
+from database.time import parse_timestamp
 from scheduler import engine
 
 
@@ -49,7 +50,7 @@ async def test_catch_up_sets_scheduled_for_with_spacing(initialized_db) -> None:
     posts = await db.get_queued_posts(schedule_id, limit=10)
     assert len(posts) == 3
 
-    scheduled = [engine._parse_timestamp(p.get("scheduled_for")) for p in posts]
+    scheduled = [parse_timestamp(p.get("scheduled_for")) for p in posts]
     assert all(s is not None for s in scheduled)
 
     t0, t1, t2 = scheduled[0], scheduled[1], scheduled[2]

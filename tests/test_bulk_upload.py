@@ -104,15 +104,10 @@ async def test_bulk_confirm_inserts_posts_and_unpauses_empty_paused(initialized_
 
 
 def test_message_to_collected_item_caption_modes() -> None:
+    """Phase 1: preserve mode was removed; only remove and single remain."""
     msg = _FakeMessage()
     msg.caption = "hello"
     msg.photo = [_FakePhoto("photo_file_id")]
-
-    item_preserve = bulk_upload._message_to_collected_item(
-        msg, caption_mode="preserve", single_caption=None, single_caption_entities=None, forward_origin_allowlist=set()
-    )  # type: ignore[attr-defined]
-    assert item_preserve is not None
-    assert item_preserve.caption == "hello"
 
     item_remove = bulk_upload._message_to_collected_item(
         msg, caption_mode="remove", single_caption=None, single_caption_entities=None, forward_origin_allowlist=set()
@@ -127,13 +122,48 @@ def test_message_to_collected_item_caption_modes() -> None:
     assert item_single.caption == "SINGLE"
 
 
+def test_message_to_collected_item_allowlisted_forward_recorded_in_remove_mode() -> None:
+    """Phase 1: forward metadata for an allowlisted origin is always recorded,
+    even in 'remove' caption mode — the gate on caption_mode == 'preserve' is gone."""
+    msg = _FakeMessage()
+    msg.photo = [_FakePhoto("photo_fid")]
+    msg.caption = "original caption"
+
+    class _FakeChat:
+        def __init__(self, chat_id: int) -> None:
+            self.id = chat_id
+
+    msg.chat = _FakeChat(9999)
+    msg.message_id = 77
+    msg.forward_from_chat = _FakeChat(-1001111111111)
+    msg.forward_from_message_id = 42
+
+    allowlist: set[int] = {-1001111111111}
+    item = bulk_upload._message_to_collected_item(  # type: ignore[attr-defined]
+        msg,
+        caption_mode="remove",
+        single_caption=None,
+        single_caption_entities=None,
+        forward_origin_allowlist=allowlist,
+    )
+    assert item is not None
+    # Caption stripped by remove mode.
+    assert item.caption is None
+    # Forward metadata still recorded because origin is allowlisted.
+    assert item.forward_from_chat_id == 9999
+    assert item.forward_from_message_id == 77
+    assert item.forward_origin_chat_id == -1001111111111
+    assert item.forward_origin_message_id == 42
+
+
 @pytest.mark.asyncio
 async def test_bulk_collect_media_records_forward_metadata_for_allowlisted_origin(initialized_db) -> None:
     user = _FakeUser(id=111)
     await db.upsert_user(user_id=user.id, username=user.username, first_name=user.first_name, last_name=user.last_name, is_admin=False)
     await db.add_forward_origin_allowlist(user_id=user.id, origin_chat_id=-1001234567890)
     context = _FakeContext()
-    context.user_data["bulk_caption_mode"] = "preserve"
+    # Phase 1: preserve mode removed; allowlisted forwards work in remove mode too.
+    context.user_data["bulk_caption_mode"] = "remove"
 
     msg = _FakeMessage()
     msg.photo = [_FakePhoto("p1")]
@@ -166,7 +196,8 @@ async def test_media_group_records_forward_metadata_per_item_for_allowlisted_ori
     await db.add_forward_origin_allowlist(user_id=user.id, origin_chat_id=-1001234567890)
     context = _FakeContext()
     context.user_data["bulk_schedule_id"] = 1
-    context.user_data["bulk_caption_mode"] = "preserve"
+    # Phase 1: preserve mode removed; allowlisted forwards work in remove mode too.
+    context.user_data["bulk_caption_mode"] = "remove"
 
     m1 = _FakeMessage()
     m1.photo = [_FakePhoto("p1")]
@@ -233,7 +264,7 @@ async def test_media_group_collected_and_flushed_on_done(initialized_db) -> None
 
     context = _FakeContext()
     context.user_data["bulk_schedule_id"] = schedule_id
-    context.user_data["bulk_caption_mode"] = "preserve"
+    context.user_data["bulk_caption_mode"] = "remove"
 
     m1 = _FakeMessage()
     m1.caption = "cap"
