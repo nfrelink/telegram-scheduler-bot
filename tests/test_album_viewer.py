@@ -89,4 +89,10 @@ def test_all_media_from_group_passes_caption_entities() -> None:
     result = _all_media_from_group(post)
     assert len(result) == 1
     assert result[0].caption == "cap"
-    assert result[0].caption_entities == entities
+    # PTB stores caption_entities as a tuple of dicts (not MessageEntity objects).
+    assert result[0].caption_entities is not None
+    assert len(result[0].caption_entities) == 1
+    ent = result[0].caption_entities[0]
+    assert ent["type"] == "bold"
+    assert ent["offset"] == 0
+    assert ent["length"] == 3

@@ -130,12 +130,14 @@ def test_message_to_collected_item_allowlisted_forward_recorded_in_remove_mode()
     msg.caption = "original caption"
 
     class _FakeChat:
-        def __init__(self, chat_id: int) -> None:
+        def __init__(self, chat_id: int, *, is_channel: bool = False) -> None:
             self.id = chat_id
+            # _extract_forward_origin_channel checks fwd_chat.type == ChatType.CHANNEL.
+            self.type = "channel" if is_channel else "private"
 
     msg.chat = _FakeChat(9999)
     msg.message_id = 77
-    msg.forward_from_chat = _FakeChat(-1001111111111)
+    msg.forward_from_chat = _FakeChat(-1001111111111, is_channel=True)
     msg.forward_from_message_id = 42
 
     allowlist: set[int] = {-1001111111111}

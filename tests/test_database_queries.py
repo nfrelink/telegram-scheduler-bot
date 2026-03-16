@@ -6,8 +6,7 @@ import pytest
 
 from database import transaction
 from database import queries as db
-from database.time import to_sqlite_timestamp
-from scheduler.engine import _parse_timestamp
+from database.time import parse_timestamp, to_sqlite_timestamp
 
 
 @pytest.mark.asyncio
@@ -148,7 +147,7 @@ async def test_scheduled_for_helpers_and_earliest(initialized_db) -> None:
     )
 
     earliest_raw = await db.get_earliest_scheduled_for()
-    earliest = _parse_timestamp(earliest_raw)
+    earliest = parse_timestamp(earliest_raw)
     assert earliest is not None
     assert earliest.replace(microsecond=0) == t2
 
