@@ -390,7 +390,6 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         if await db.get_queue_count(schedule_id) == 0:
-            channel_id_raw = (await db.get_schedule_for_user(user_id, schedule_id) or {}).get("channel_id")
             back_cb = f"{_CB_SCHEDULE}:{schedule_id}"
             keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("< Back", callback_data=back_cb)]])
             try:
