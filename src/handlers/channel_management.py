@@ -39,8 +39,8 @@ async def _channels_list_text_and_keyboard(user_id: int) -> tuple[str, InlineKey
             "You have no verified channels.\n\n"
             "To add one:\n"
             "1) Add this bot to the channel as an administrator (posting permission required)\n"
-            "2) Post /channelid in the channel — the bot will reply with its numeric ID\n"
-            "3) Tap Add channel below and send that ID here"
+            "2) Tap Add channel below, then either send the channel's numeric ID or @handle, "
+            "or simply forward any message from that channel here"
         )
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Add channel", callback_data="ch:add")],
@@ -174,8 +174,8 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if data == "ch:add":
         try:
             await query.edit_message_text(
-                "Send the channel ID (e.g. -100123456789) or @handle.\n\n"
-                "Tip: post /channelid in the channel first if you need the numeric ID.\n\n"
+                "Send the channel ID (e.g. -100123456789) or @handle, "
+                "or forward any message from the channel here.\n\n"
                 "/cancel to abort."
             )
         except Exception:
@@ -250,17 +250,34 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 async def channels_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle the user's text channel ID or @handle during AWAITING_ADD."""
+    """Handle the user's text channel ID, @handle, or forwarded message during AWAITING_ADD."""
     msg = update.message
     if msg is None or update.effective_user is None:
         return _AWAITING_ADD
 
-    raw = (msg.text or "").strip()
+    user_id = update.effective_user.id
+
+    # Accept a forwarded message from a channel — extract the channel ID from it.
+    raw: str | None = None
+    fwd_chat = getattr(msg, "forward_from_chat", None)
+    if fwd_chat is not None:
+        raw = str(fwd_chat.id)
+    else:
+        origin = getattr(msg, "forward_origin", None)
+        if origin is not None and getattr(origin, "chat", None) is not None:
+            raw = str(origin.chat.id)
+
+    # Fall back to typed text (numeric ID or @handle).
+    if raw is None:
+        raw = (msg.text or "").strip() or None
+
     if not raw:
-        await msg.reply_text("Please send a channel ID (e.g. -100123456789) or @handle.")
+        await msg.reply_text(
+            "Please send the channel ID (e.g. -100123456789), @handle, "
+            "or forward any message from the channel here."
+        )
         return _AWAITING_ADD
 
-    user_id = update.effective_user.id
     await _run_add_flow(raw, user_id, context, msg.reply_text)
     return ConversationHandler.END
 
@@ -278,7 +295,7 @@ channels_conversation_handler = ConversationHandler(
     states={
         _SHOWING: [CallbackQueryHandler(channels_callback, pattern=r"^ch:")],
         _AWAITING_ADD: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, channels_add_handler),
+            MessageHandler(~filters.COMMAND, channels_add_handler),
         ],
     },
     fallbacks=[CommandHandler("cancel", channels_cancel)],

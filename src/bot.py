@@ -8,7 +8,6 @@ import os
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from handlers.admin import broadcast_command, debug_command, stats_command
-from handlers.channel_info import channelid_command
 from handlers.channel_management import channels_conversation_handler
 from handlers.bulk_upload import bulk_upload_conversation_handler
 from handlers.forwarding import forward_conversation_handler
@@ -76,9 +75,6 @@ def create_application() -> Application:
 
     # Channel management (/channels)
     application.add_handler(channels_conversation_handler)
-    # /channelid stays registered — it fires when posted in a channel and helps
-    # users discover their channel ID before adding via /channels.
-    application.add_handler(CommandHandler("channelid", channelid_command))
 
     # Forwarding allowlist (/forward)
     application.add_handler(forward_conversation_handler)
