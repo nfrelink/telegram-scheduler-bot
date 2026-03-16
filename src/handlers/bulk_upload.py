@@ -44,6 +44,11 @@ class _CollectedItem:
     # The raw channel that the message was forwarded from, regardless of the
     # allowlist.  Used to decide whether to show the album-split prompt.
     raw_origin_chat_id: int | None = None
+    # Message ID in the origin channel, used to build a t.me deep link.
+    raw_origin_message_id: int | None = None
+    # True if the message was forwarded from any source (channel or person).
+    # Distinct from raw_origin_chat_id which is only set for channel forwards.
+    raw_origin_is_forwarded: bool = False
 
 
 def _state_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -110,6 +115,17 @@ def _extract_forward_origin_channel(message: Message) -> tuple[int | None, int |
                 return None, None
 
     return None, None
+
+
+def _is_forwarded_message(message: Message) -> bool:
+    """Return True if the message was forwarded from any source (channel or person)."""
+    if getattr(message, "forward_from_chat", None) is not None:
+        return True
+    if getattr(message, "forward_from", None) is not None:
+        return True
+    if getattr(message, "forward_origin", None) is not None:
+        return True
+    return False
 
 
 def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
@@ -237,6 +253,7 @@ def _message_to_collected_item(
     # Always extract origin so we can detect forwarded albums later, even when
     # the source channel is not on the allowlist.
     raw_origin_chat_id, raw_origin_msg_id = _extract_forward_origin_channel(message)
+    raw_origin_is_forwarded = _is_forwarded_message(message)
 
     allow = forward_origin_allowlist or set()
     if allow and raw_origin_chat_id is not None and raw_origin_chat_id in allow:
@@ -264,6 +281,8 @@ def _message_to_collected_item(
             forward_origin_chat_id=forward_origin_chat_id,
             forward_origin_message_id=forward_origin_message_id,
             raw_origin_chat_id=raw_origin_chat_id,
+            raw_origin_message_id=raw_origin_msg_id,
+            raw_origin_is_forwarded=raw_origin_is_forwarded,
         )
 
     if message.video:
@@ -277,6 +296,8 @@ def _message_to_collected_item(
             forward_origin_chat_id=forward_origin_chat_id,
             forward_origin_message_id=forward_origin_message_id,
             raw_origin_chat_id=raw_origin_chat_id,
+            raw_origin_message_id=raw_origin_msg_id,
+            raw_origin_is_forwarded=raw_origin_is_forwarded,
         )
 
     if message.document:
@@ -290,6 +311,8 @@ def _message_to_collected_item(
             forward_origin_chat_id=forward_origin_chat_id,
             forward_origin_message_id=forward_origin_message_id,
             raw_origin_chat_id=raw_origin_chat_id,
+            raw_origin_message_id=raw_origin_msg_id,
+            raw_origin_is_forwarded=raw_origin_is_forwarded,
         )
 
     return None
@@ -352,26 +375,58 @@ def _group_needs_split_prompt(items: list[_CollectedItem], allowlist: set[int]) 
     Only forwarded albums whose origin is NOT on the allowlist need a decision.
     Locally uploaded albums and allowlisted-channel albums are always handled
     silently (kept as album or forwarded natively, respectively).
+
+    Person-forwarded albums (forward_from set, no channel origin) also trigger
+    the prompt — they can never be on the channel allowlist.
     """
     if not items:
         return False
-    origin = items[0].raw_origin_chat_id
-    if origin is None:
+    first = items[0]
+    if not first.raw_origin_is_forwarded:
         return False  # locally uploaded — keep as album without prompting
-    return origin not in allowlist  # non-allowlisted forward — ask
+    if first.raw_origin_chat_id is not None and first.raw_origin_chat_id in allowlist:
+        return False  # allowlisted channel — forward natively without prompting
+    return True  # forwarded from non-allowlisted source (channel or person) — ask
 
 
-def _build_split_prompt(count: int, placeholder_idx: int) -> tuple[str, InlineKeyboardMarkup]:
+def _origin_link(chat_id: int | None, message_id: int | None) -> str | None:
+    """Return a t.me deep link for a channel message, or None if not possible.
+
+    Only works for supergroup/channel IDs in the -100XXXXXXXXXX format.
+    """
+    if not chat_id or not message_id:
+        return None
+    chat_str = str(chat_id)
+    if not chat_str.startswith("-100"):
+        return None
+    inner_id = chat_str[4:]  # strip the "-100" prefix
+    return f"https://t.me/c/{inner_id}/{message_id}"
+
+
+def _build_split_prompt(
+    count: int,
+    placeholder_idx: int,
+    *,
+    album_num: int,
+    total_albums: int,
+    first_caption: str | None = None,
+    origin_link: str | None = None,
+) -> tuple[str, InlineKeyboardMarkup]:
     """Build the text and inline keyboard for a single split decision."""
-    text = (
-        f"Forwarded album — {count} item(s).\n"
-        "Keep as one album post, or split into individual posts?"
-    )
-    keyboard = InlineKeyboardMarkup([[
+    text = f"Album {album_num} of {total_albums} — {count} item(s).\n"
+    if first_caption:
+        preview = first_caption[:80] + ("..." if len(first_caption) > 80 else "")
+        text += f'Caption: "{preview}"\n'
+    text += "Keep as one album post, or split into individual posts?"
+
+    decision_row = [
         InlineKeyboardButton("Keep as album", callback_data=f"sp:keep:{placeholder_idx}"),
         InlineKeyboardButton(f"Split into {count}", callback_data=f"sp:split:{placeholder_idx}"),
-    ]])
-    return text, keyboard
+    ]
+    rows: list[list[InlineKeyboardButton]] = [decision_row]
+    if origin_link:
+        rows.append([InlineKeyboardButton("View original", url=origin_link)])
+    return text, InlineKeyboardMarkup(rows)
 
 
 def _apply_split_decisions(
@@ -740,10 +795,13 @@ async def bulk_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             _get_media_groups(context).pop(gid, None)
             placeholder_idx = _get_media_group_indexes(context).pop(gid, None)
             if placeholder_idx is not None:
+                first_item = items[0]
                 pending_splits.append({
                     "placeholder_idx": placeholder_idx,
                     "items": items,
                     "count": len(items),
+                    "first_caption": next((i.caption for i in items if i.caption), None),
+                    "origin_link": _origin_link(first_item.raw_origin_chat_id, first_item.raw_origin_message_id),
                 })
             else:
                 # No placeholder recorded — flush as album silently.
@@ -757,10 +815,18 @@ async def bulk_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return COLLECTING_MEDIA
 
     if pending_splits:
+        total_albums = len(pending_splits)
         context.user_data["bulk_pending_splits"] = pending_splits
         context.user_data["bulk_split_decisions"] = {}
+        context.user_data["bulk_total_splits"] = total_albums
         first = pending_splits[0]
-        text, keyboard = _build_split_prompt(first["count"], first["placeholder_idx"])
+        text, keyboard = _build_split_prompt(
+            first["count"], first["placeholder_idx"],
+            album_num=1,
+            total_albums=total_albums,
+            first_caption=first.get("first_caption"),
+            origin_link=first.get("origin_link"),
+        )
         await update.message.reply_text(text, reply_markup=keyboard)
         return DECIDING_SPLITS
 
@@ -859,7 +925,17 @@ async def bulk_split_decision(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         if pending:
             next_item = pending[0]
-            text, keyboard = _build_split_prompt(next_item["count"], next_item["placeholder_idx"])
+            # total_albums is fixed at the start; album_num is derived from how
+            # many remain vs. how many were originally queued.
+            total_albums = context.user_data.get("bulk_total_splits", len(pending))
+            album_num = total_albums - len(pending) + 1
+            text, keyboard = _build_split_prompt(
+                next_item["count"], next_item["placeholder_idx"],
+                album_num=album_num,
+                total_albums=total_albums,
+                first_caption=next_item.get("first_caption"),
+                origin_link=next_item.get("origin_link"),
+            )
             try:
                 await query.edit_message_text(text, reply_markup=keyboard)
             except Exception:
