@@ -81,4 +81,5 @@ htmlcov/
 # Project specific
 data/temp/
 
+!README.md
 *.md
