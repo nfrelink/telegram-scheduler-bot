@@ -1017,3 +1017,20 @@ async def get_delivery_stats_sum_since(*, since_day: date) -> dict[str, int]:
             "send_failures": int(row[1]),  # type: ignore[index]
         }
 
+
+# --- Ownership-checked channel lookups ------------------------------------
+
+
+async def get_channel_by_telegram_id_for_user(user_id: int, telegram_channel_id: str) -> dict[str, Any] | None:
+    channel = await get_channel_by_telegram_id(telegram_channel_id)
+    if channel is None or int(channel["user_id"]) != int(user_id):
+        return None
+    return channel
+
+
+async def get_channel_by_id_for_user(user_id: int, channel_db_id: int) -> dict[str, Any] | None:
+    channel = await get_channel_by_id(channel_db_id)
+    if channel is None or int(channel["user_id"]) != int(user_id):
+        return None
+    return channel
+

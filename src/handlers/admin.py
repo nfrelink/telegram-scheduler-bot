@@ -15,13 +15,9 @@ from telegram.ext import ContextTypes
 
 from database import queries as db
 from handlers.common import ensure_user_record, get_admin_user_id
+from utils.tg_text import utf16_len
 
 logger = logging.getLogger(__name__)
-
-
-def _utf16_len(text: str) -> int:
-    # Telegram entity offsets/lengths are in UTF-16 code units.
-    return len(text.encode("utf-16-le")) // 2
 
 
 def _extract_command_payload(message: Message) -> tuple[str | None, list[MessageEntity] | None]:
@@ -47,7 +43,7 @@ def _extract_command_payload(message: Message) -> tuple[str | None, list[Message
 
     # Adjust entities to new offsets relative to payload_text.
     prefix_text = text[:start_idx]
-    prefix_utf16 = _utf16_len(prefix_text)
+    prefix_utf16 = utf16_len(prefix_text)
 
     entities: list[MessageEntity] = []
     for ent in (message.entities or []):

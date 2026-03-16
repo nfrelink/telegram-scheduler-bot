@@ -17,19 +17,12 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandl
 
 from database import queries as db
 from database.time import parse_timestamp
-from handlers.common import ensure_user_record
+from handlers.common import ensure_user_record, parse_int
 from handlers.selection import selection_segments
 from scheduler.timing import calculate_next_run
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
-
-
-def _parse_int(text: str) -> int | None:
-    try:
-        return int(text.strip())
-    except ValueError:
-        return None
 
 
 def _format_dt(dt: datetime, *, tz_name: str | None = None) -> str:
@@ -608,7 +601,7 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     schedule_id: int | None = None
     used_selected = False
     if context.args:
-        schedule_id = _parse_int(context.args[0])
+        schedule_id = parse_int(context.args[0])
         if schedule_id is None:
             await update.message.reply_text("Invalid schedule id.")
             return
@@ -674,7 +667,7 @@ async def delete_post_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Usage: /deletepost <post_id>")
         return
 
-    post_id = _parse_int(context.args[0])
+    post_id = parse_int(context.args[0])
     if post_id is None:
         await update.message.reply_text("Invalid post id.")
         return

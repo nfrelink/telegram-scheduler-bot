@@ -20,7 +20,7 @@ from handlers.queue_management import (
 )
 from handlers.schedule_management import schedules_conversation_handler
 from handlers.selection import select_callback, select_command
-from handlers.timezone_management import timezone_callback, timezone_command
+from handlers.timezone_management import gettimezone_command, settimezone_command, timezone_callback, timezone_command
 from handlers.user_commands import help_command, start_command
 from handlers.verification import channel_post_handler
 
@@ -70,6 +70,8 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("select", select_command))
     application.add_handler(CallbackQueryHandler(select_callback, pattern=r"^sc:"))
     application.add_handler(CommandHandler("timezone", timezone_command))
+    application.add_handler(CommandHandler("gettimezone", gettimezone_command))
+    application.add_handler(CommandHandler("settimezone", settimezone_command))
     application.add_handler(CallbackQueryHandler(timezone_callback, pattern=r"^tz:"))
 
     # Channel management (/channels)

@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import logging
-import os
-from datetime import timezone
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import queries as db
 from handlers.common import ensure_user_record
+from utils.tz import default_timezone_name, is_valid_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -70,20 +68,6 @@ _REGIONS: dict[str, tuple[str, list[tuple[str, str]]]] = {
         ("UTC", "UTC"),
     ]),
 }
-
-
-def _default_timezone_name() -> str:
-    return os.getenv("DEFAULT_TIMEZONE", "UTC") or "UTC"
-
-
-def _is_valid_timezone(tz_name: str) -> bool:
-    if tz_name.upper() in {"UTC", "ETC/UTC"}:
-        return True
-    try:
-        ZoneInfo(tz_name)
-        return True
-    except Exception:
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +138,7 @@ async def gettimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     configured = await db.get_user_timezone(update.effective_user.id)
-    effective = configured or _default_timezone_name()
+    effective = configured or default_timezone_name()
 
     if not configured:
         text = (
@@ -191,11 +175,11 @@ async def settimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     lowered = raw.lower()
     if lowered in {"default", "clear", "reset"}:
         await db.set_user_timezone(update.effective_user.id, None)
-        effective = _default_timezone_name()
+        effective = default_timezone_name()
         await update.message.reply_text(f"Timezone cleared. Using default: {effective}.")
         return
 
-    if not _is_valid_timezone(raw):
+    if not is_valid_timezone(raw):
         await update.message.reply_text(
             f"Unknown timezone: {raw}\n"
             f"Use an IANA timezone name like Europe/Amsterdam or UTC.\n"
@@ -256,7 +240,7 @@ async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Set a specific timezone.
     if data.startswith(_CB_SET_PREFIX):
         iana_name = data[len(_CB_SET_PREFIX):]
-        if not _is_valid_timezone(iana_name):
+        if not is_valid_timezone(iana_name):
             try:
                 await query.edit_message_text(
                     f"Invalid timezone: {iana_name}\nPlease select again.",

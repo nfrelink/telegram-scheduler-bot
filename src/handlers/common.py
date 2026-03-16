@@ -26,6 +26,13 @@ def get_admin_user_id() -> int | None:
         return None
 
 
+def parse_int(text: str) -> int | None:
+    try:
+        return int(text.strip())
+    except ValueError:
+        return None
+
+
 async def ensure_user_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> dict:
     """Upsert the current user and mark last_active_at."""
     user = update.effective_user

@@ -21,7 +21,7 @@ from telegram.ext import (
 from database import queries as db
 from handlers.common import ensure_user_record
 from handlers.selection import selection_segments
-from utils.tg_text import Segment, render
+from utils.tg_text import Segment, render, utf16_len
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +84,6 @@ def _entities_to_dicts(entities: list[MessageEntity] | None) -> list[dict[str, A
     return [e.to_dict() for e in entities]
 
 
-def _utf16_len(text: str) -> int:
-    # Telegram entity offsets/lengths are in UTF-16 code units.
-    return len(text.encode("utf-16-le")) // 2
-
-
 def _extract_forward_origin_channel(message: Message) -> tuple[int | None, int | None]:
     """Return (origin_chat_id, origin_message_id) if message was forwarded from a channel."""
     # Bot API legacy fields (still present in PTB for compatibility).
@@ -148,7 +143,7 @@ def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
         if not s:
             return
         out.append(s)
-        out_utf16 += _utf16_len(s)
+        out_utf16 += utf16_len(s)
 
     while i < len(text):
         ch = text[i]
@@ -166,7 +161,7 @@ def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
                 code_text = text[i + 1 : j]
                 start = out_utf16
                 _append_plain(code_text)
-                length = _utf16_len(code_text)
+                length = utf16_len(code_text)
                 if length:
                     entities.append({"type": "code", "offset": start, "length": length})
                 i = j + 1
@@ -182,7 +177,7 @@ def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
                     url = text[close_bracket + 2 : close_paren]
                     start = out_utf16
                     _append_plain(link_text)
-                    length = _utf16_len(link_text)
+                    length = utf16_len(link_text)
                     if length and url:
                         entities.append({"type": "text_link", "offset": start, "length": length, "url": url})
                     i = close_paren + 1

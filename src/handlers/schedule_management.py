@@ -9,8 +9,6 @@ embedded wizard states so everything stays in one conversation.
 from __future__ import annotations
 
 import logging
-import os
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -22,10 +20,10 @@ from telegram.ext import (
     filters,
 )
 
-from database import access as db_access
 from database import queries as db
-from handlers.common import ensure_user_record
+from handlers.common import ensure_user_record, parse_int
 from scheduler.timing import WEEKDAY_NAME_TO_INT, parse_time_string, validate_schedule_pattern
+from utils.tz import default_timezone_name, is_valid_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -58,34 +56,13 @@ ES_WAIT_WEEKLY_TIMES = 26
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def _default_timezone_name() -> str:
-    return os.getenv("DEFAULT_TIMEZONE", "UTC") or "UTC"
-
-
 async def _effective_user_timezone_name(user_id: int) -> str:
     tz = await db.get_user_timezone(user_id)
-    return tz or _default_timezone_name()
-
-
-def _is_valid_timezone_name(tz_name: str) -> bool:
-    if tz_name.upper() in {"UTC", "ETC/UTC"}:
-        return True
-    try:
-        ZoneInfo(tz_name)
-        return True
-    except (ZoneInfoNotFoundError, Exception):
-        return False
-
-
-def _parse_int(text: str) -> int | None:
-    try:
-        return int(text.strip())
-    except ValueError:
-        return None
+    return tz or default_timezone_name()
 
 
 def _parse_schedule_id(text: str) -> int | None:
-    return _parse_int(text)
+    return parse_int(text)
 
 
 def _parse_interval_input(text: str) -> tuple[int, int] | None:
@@ -94,12 +71,12 @@ def _parse_interval_input(text: str) -> tuple[int, int] | None:
     if not raw:
         return None
     if raw.endswith("h"):
-        n = _parse_int(raw[:-1])
+        n = parse_int(raw[:-1])
         return (n, 0) if n and n > 0 else None
     if raw.endswith("m"):
-        n = _parse_int(raw[:-1])
+        n = parse_int(raw[:-1])
         return (0, n) if n and n > 0 else None
-    n = _parse_int(raw)
+    n = parse_int(raw)
     return (0, n) if n and n > 0 else None
 
 
@@ -171,7 +148,7 @@ async def _schedules_list_text_and_keyboard(
     if sel_ch_id is None:
         return "No channel selected. Use /select to pick a channel first.", None
 
-    channel = await db_access.get_channel_by_id_for_user(user_id, int(sel_ch_id))
+    channel = await db.get_channel_by_id_for_user(user_id, int(sel_ch_id))
     if channel is None:
         return "Selected channel not found.", None
 
@@ -375,7 +352,7 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if sel_ch_id is None:
             await query.answer("Select a channel first with /select.", show_alert=True)
             return SM_SHOWING
-        channel = await db_access.get_channel_by_id_for_user(user_id, int(sel_ch_id))
+        channel = await db.get_channel_by_id_for_user(user_id, int(sel_ch_id))
         if channel is None:
             await query.answer("Selected channel not found.", show_alert=True)
             return SM_SHOWING
@@ -408,7 +385,7 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["es_schedule_id"] = s_id
         context.user_data["es_current_name"] = schedule.get("name")
         context.user_data["es_current_pattern"] = schedule.get("pattern")
-        context.user_data["es_timezone"] = str(schedule.get("timezone") or _default_timezone_name())
+        context.user_data["es_timezone"] = str(schedule.get("timezone") or default_timezone_name())
         tz_name = context.user_data["es_timezone"]
         try:
             await query.edit_message_text(
@@ -438,7 +415,7 @@ async def schedules_tz_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await msg.reply_text("Enter a timezone name (e.g. Europe/Amsterdam) or /cancel.")
         return SM_WAIT_TZ_INPUT
 
-    if not _is_valid_timezone_name(raw):
+    if not is_valid_timezone(raw):
         await msg.reply_text(
             f"Unknown timezone: {raw!r}\n"
             "Use an IANA timezone name like Europe/Amsterdam, UTC, America/New_York."
@@ -494,7 +471,7 @@ async def newschedule_set_type(update: Update, context: ContextTypes.DEFAULT_TYP
     if schedule_type == "interval":
         await update.message.reply_text("Enter interval (examples: 1h, 30m, 90).")
         return NS_WAIT_INTERVAL
-    tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
+    tz_name = str(context.user_data.get("ns_timezone") or default_timezone_name())
     if schedule_type == "daily":
         await update.message.reply_text(
             f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
@@ -531,7 +508,7 @@ async def newschedule_set_daily_times(update: Update, context: ContextTypes.DEFA
         return ConversationHandler.END
     times = _parse_times_csv(update.message.text or "")
     if times is None:
-        tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
+        tz_name = str(context.user_data.get("ns_timezone") or default_timezone_name())
         await update.message.reply_text(
             f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
         )
@@ -548,7 +525,7 @@ async def newschedule_set_weekly_days(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text("Invalid weekdays. Use names like: monday,tuesday,friday")
         return NS_WAIT_WEEKLY_DAYS
     context.user_data["ns_days"] = days
-    tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
+    tz_name = str(context.user_data.get("ns_timezone") or default_timezone_name())
     await update.message.reply_text(
         f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
         "Example: 12:00"
@@ -562,7 +539,7 @@ async def newschedule_set_weekly_times(update: Update, context: ContextTypes.DEF
         return ConversationHandler.END
     times = _parse_times_csv(update.message.text or "")
     if times is None:
-        tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
+        tz_name = str(context.user_data.get("ns_timezone") or default_timezone_name())
         await update.message.reply_text(
             f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
         )
@@ -584,7 +561,7 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
     channel_db_id = int(raw_ch)
     name = str(context.user_data.get("ns_name"))
-    tz_name = str(context.user_data.get("ns_timezone") or _default_timezone_name())
+    tz_name = str(context.user_data.get("ns_timezone") or default_timezone_name())
     schedule = await db.create_schedule(
         channel_db_id=channel_db_id,
         name=name,
@@ -660,7 +637,7 @@ async def editschedule_set_type(update: Update, context: ContextTypes.DEFAULT_TY
     if schedule_type == "interval":
         await update.message.reply_text("Enter interval (examples: 1h, 30m, 90).")
         return ES_WAIT_INTERVAL
-    tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
+    tz_name = str(context.user_data.get("es_timezone") or default_timezone_name())
     if schedule_type == "daily":
         await update.message.reply_text(
             f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
@@ -697,7 +674,7 @@ async def editschedule_set_daily_times(update: Update, context: ContextTypes.DEF
         return ConversationHandler.END
     times = _parse_times_csv(update.message.text or "")
     if times is None:
-        tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
+        tz_name = str(context.user_data.get("es_timezone") or default_timezone_name())
         await update.message.reply_text(
             f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
         )
@@ -714,7 +691,7 @@ async def editschedule_set_weekly_days(update: Update, context: ContextTypes.DEF
         await update.message.reply_text("Invalid weekdays. Use names like: monday,tuesday,friday")
         return ES_WAIT_WEEKLY_DAYS
     context.user_data["es_days"] = days
-    tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
+    tz_name = str(context.user_data.get("es_timezone") or default_timezone_name())
     await update.message.reply_text(
         f"Enter times in {tz_name} (HH:MM) separated by commas.\n"
         "Example: 12:00"
@@ -728,7 +705,7 @@ async def editschedule_set_weekly_times(update: Update, context: ContextTypes.DE
         return ConversationHandler.END
     times = _parse_times_csv(update.message.text or "")
     if times is None:
-        tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
+        tz_name = str(context.user_data.get("es_timezone") or default_timezone_name())
         await update.message.reply_text(
             f"Invalid times. Use HH:MM separated by commas (interpreted in {tz_name})."
         )
@@ -750,7 +727,7 @@ async def _editschedule_finalize(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
     s_id = int(raw_id)
     await db.update_schedule_pattern(s_id, pattern)
-    tz_name = str(context.user_data.get("es_timezone") or _default_timezone_name())
+    tz_name = str(context.user_data.get("es_timezone") or default_timezone_name())
     await update.message.reply_text(
         f"Pattern updated: {_pattern_summary(pattern, tz_name=tz_name)}"
     )
@@ -809,7 +786,7 @@ async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFA
     raw_tz = (tz_arg or "").strip()
     if raw_tz.lower() in {"default", "reset", "clear"}:
         raw_tz = await _effective_user_timezone_name(user_id)
-    if not _is_valid_timezone_name(raw_tz):
+    if not is_valid_timezone(raw_tz):
         await update.message.reply_text(f"Unknown timezone: {raw_tz!r}")
         return
     await db.update_schedule_timezone(schedule_id, timezone_name=raw_tz)

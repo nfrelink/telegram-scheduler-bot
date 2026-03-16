@@ -21,7 +21,6 @@ from telegram.ext import (
     filters,
 )
 
-from database import access as db_access
 from database import queries as db
 from handlers.common import ensure_user_record
 from utils.tg_text import Segment, render
@@ -222,7 +221,7 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         except ValueError:
             return _SHOWING
 
-        channel = await db_access.get_channel_by_id_for_user(user_id, ch_id)
+        channel = await db.get_channel_by_id_for_user(user_id, ch_id)
         if channel is None:
             await query.answer("Channel not found.", show_alert=True)
             return _SHOWING

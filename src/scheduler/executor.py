@@ -20,6 +20,20 @@ logger = logging.getLogger(__name__)
 
 _FILE_ID_ERROR_RE = re.compile(r"(file[_ ]?id|file identifier|wrong file)", re.IGNORECASE)
 
+# Maps media_type -> (bot method name, media keyword argument name)
+_SINGLE_SEND: dict[str, tuple[str, str]] = {
+    "photo": ("send_photo", "photo"),
+    "video": ("send_video", "video"),
+    "document": ("send_document", "document"),
+}
+
+# Maps media_type -> InputMedia class for media groups
+_INPUT_MEDIA: dict[str, type] = {
+    "photo": InputMediaPhoto,
+    "video": InputMediaVideo,
+    "document": InputMediaDocument,
+}
+
 
 async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, Any]) -> bool:
     """Send a queued post to a Telegram channel.
@@ -116,70 +130,19 @@ async def _send_post_once(
     entities = _decode_entities(caption_entities)
     parse_mode = None if entities else _to_parse_mode(caption_parse_mode)
 
+    if media_type in _SINGLE_SEND:
+        method_name, media_kwarg = _SINGLE_SEND[media_type]
+        method = getattr(bot, method_name)
+        payload = _resolve_file_ref(file_id=file_id, file_path=file_path)
+        kwargs = dict(chat_id=telegram_channel_id, caption=caption, parse_mode=parse_mode, caption_entities=entities)
+        if isinstance(payload, Path):
+            with payload.open("rb") as f:
+                await method(**{media_kwarg: f}, **kwargs)
+        else:
+            await method(**{media_kwarg: payload}, **kwargs)
+        return True
+
     match media_type:
-        case "photo":
-            payload = _resolve_file_ref(file_id=file_id, file_path=file_path)
-            if isinstance(payload, Path):
-                with payload.open("rb") as f:
-                    await bot.send_photo(
-                        chat_id=telegram_channel_id,
-                        photo=f,
-                        caption=caption,
-                        parse_mode=parse_mode,
-                        caption_entities=entities,
-                    )
-            else:
-                await bot.send_photo(
-                    chat_id=telegram_channel_id,
-                    photo=payload,
-                    caption=caption,
-                    parse_mode=parse_mode,
-                    caption_entities=entities,
-                )
-            return True
-
-        case "video":
-            payload = _resolve_file_ref(file_id=file_id, file_path=file_path)
-            if isinstance(payload, Path):
-                with payload.open("rb") as f:
-                    await bot.send_video(
-                        chat_id=telegram_channel_id,
-                        video=f,
-                        caption=caption,
-                        parse_mode=parse_mode,
-                        caption_entities=entities,
-                    )
-            else:
-                await bot.send_video(
-                    chat_id=telegram_channel_id,
-                    video=payload,
-                    caption=caption,
-                    parse_mode=parse_mode,
-                    caption_entities=entities,
-                )
-            return True
-
-        case "document":
-            payload = _resolve_file_ref(file_id=file_id, file_path=file_path)
-            if isinstance(payload, Path):
-                with payload.open("rb") as f:
-                    await bot.send_document(
-                        chat_id=telegram_channel_id,
-                        document=f,
-                        caption=caption,
-                        parse_mode=parse_mode,
-                        caption_entities=entities,
-                    )
-            else:
-                await bot.send_document(
-                    chat_id=telegram_channel_id,
-                    document=payload,
-                    caption=caption,
-                    parse_mode=parse_mode,
-                    caption_entities=entities,
-                )
-            return True
-
         case "media_group":
             media_group_data = post.get("media_group_data")
             if not media_group_data:
@@ -236,35 +199,19 @@ async def _retry_with_download(
         tg_file = await bot.get_file(file_id)
         await tg_file.download_to_drive(str(tmp_path))
 
+        if media_type not in _SINGLE_SEND:
+            return False
         with tmp_path.open("rb") as f:
             entities = _decode_entities(caption_entities)
             parse_mode = None if entities else _to_parse_mode(caption_parse_mode)
-            if media_type == "photo":
-                await bot.send_photo(
-                    chat_id=telegram_channel_id,
-                    photo=f,
-                    caption=caption,
-                    parse_mode=parse_mode,
-                    caption_entities=entities,
-                )
-            elif media_type == "video":
-                await bot.send_video(
-                    chat_id=telegram_channel_id,
-                    video=f,
-                    caption=caption,
-                    parse_mode=parse_mode,
-                    caption_entities=entities,
-                )
-            elif media_type == "document":
-                await bot.send_document(
-                    chat_id=telegram_channel_id,
-                    document=f,
-                    caption=caption,
-                    parse_mode=parse_mode,
-                    caption_entities=entities,
-                )
-            else:
-                return False
+            method_name, media_kwarg = _SINGLE_SEND[media_type]
+            await getattr(bot, method_name)(
+                **{media_kwarg: f},
+                chat_id=telegram_channel_id,
+                caption=caption,
+                parse_mode=parse_mode,
+                caption_entities=entities,
+            )
 
         logger.info("Recovered by downloading and re-uploading media_type=%s", media_type)
         return True
@@ -320,21 +267,10 @@ def _parse_media_group(
         entities = _decode_entities(caption_entities)
         parse_mode = None if entities else _to_parse_mode(caption_parse_mode)
 
-        match media_type:
-            case "photo":
-                media.append(
-                    InputMediaPhoto(media=payload, caption=caption, parse_mode=parse_mode, caption_entities=entities)
-                )
-            case "video":
-                media.append(
-                    InputMediaVideo(media=payload, caption=caption, parse_mode=parse_mode, caption_entities=entities)
-                )
-            case "document":
-                media.append(
-                    InputMediaDocument(media=payload, caption=caption, parse_mode=parse_mode, caption_entities=entities)
-                )
-            case _:
-                raise ValueError(f"Unsupported media_type in media group: {media_type}")
+        media_cls = _INPUT_MEDIA.get(media_type)
+        if media_cls is None:
+            raise ValueError(f"Unsupported media_type in media group: {media_type}")
+        media.append(media_cls(media=payload, caption=caption, parse_mode=parse_mode, caption_entities=entities))
 
     return media
 
