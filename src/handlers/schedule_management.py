@@ -560,6 +560,9 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Session expired. Use /schedules to start again.")
         return ConversationHandler.END
     channel_db_id = int(raw_ch)
+    user_id = update.effective_user.id
+    prior_ctx = await db.get_user_context(user_id)
+    is_first_schedule = not prior_ctx.get("selected_schedule_id")
     name = str(context.user_data.get("ns_name"))
     tz_name = str(context.user_data.get("ns_timezone") or default_timezone_name())
     schedule = await db.create_schedule(
@@ -570,17 +573,23 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
         state="paused",
     )
     await db.set_user_context(
-        user_id=update.effective_user.id,
+        user_id=user_id,
         selected_channel_id=channel_db_id,
         selected_schedule_id=int(schedule["id"]),
     )
-    await update.message.reply_text(
+    confirmation = (
         f"Schedule '{name}' created.\n"
         f"Pattern: {_pattern_summary(pattern, tz_name=tz_name)}\n"
         "State: paused — use /schedules to resume when ready."
     )
+    if is_first_schedule:
+        confirmation += (
+            "\n\nYou're all set! Send photos/videos to this chat to queue posts, "
+            "or use /bulk for batch uploads."
+        )
+    await update.message.reply_text(confirmation)
     _clear_ns_state(context)
-    logger.info("User %s created schedule %s", update.effective_user.id, schedule["id"])
+    logger.info("User %s created schedule %s", user_id, schedule["id"])
     return ConversationHandler.END
 
 

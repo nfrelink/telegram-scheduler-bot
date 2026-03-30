@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 
+from telegram import BotCommand
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from handlers.admin import broadcast_command, debug_command, stats_command
@@ -24,6 +25,24 @@ from handlers.user_commands import help_command, start_command
 from handlers.verification import channel_post_handler
 
 logger = logging.getLogger(__name__)
+
+USER_COMMANDS: list[BotCommand] = [
+    BotCommand("start", "Start the bot"),
+    BotCommand("help", "Show available commands"),
+    BotCommand("select", "Pick active channel and schedule"),
+    BotCommand("queue", "Browse and manage the post queue"),
+    BotCommand("timezone", "Set your display timezone"),
+    BotCommand("channels", "Add or remove channels"),
+    BotCommand("schedules", "Create, edit, and manage schedules"),
+    BotCommand("forward", "Manage native-forwarding allowlist"),
+    BotCommand("bulk", "Start queuing posts for bulk upload"),
+    BotCommand("cancel", "Cancel current operation"),
+]
+
+
+async def _post_init(application: Application) -> None:
+    """Register the bot's command menu with Telegram on startup."""
+    await application.bot.set_my_commands(USER_COMMANDS)
 
 
 def _safe_update_meta(update: object) -> dict[str, object]:
@@ -61,7 +80,7 @@ def create_application() -> Application:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
-    application = Application.builder().token(token).build()
+    application = Application.builder().token(token).post_init(_post_init).build()
 
     # Core user commands
     application.add_handler(CommandHandler("start", start_command))

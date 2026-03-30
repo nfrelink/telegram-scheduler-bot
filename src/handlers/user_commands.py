@@ -54,6 +54,29 @@ def _onboarding_segments() -> list[Segment]:
     ]
 
 
+async def _onboarding_nudge(user_id: int) -> str | None:
+    """Return a contextual next-step hint, or None if setup is complete."""
+    channels = await db.get_user_channels(user_id)
+    if not channels:
+        return "Next step: Add your first channel with /channels"
+
+    has_any_schedule = False
+    for ch in channels:
+        schedules = await db.get_channel_schedules(int(ch["id"]))
+        if schedules:
+            has_any_schedule = True
+            break
+
+    if not has_any_schedule:
+        return "Next step: Create a posting schedule with /schedules"
+
+    ctx = await db.get_user_context(user_id)
+    if not ctx.get("selected_channel_id") or not ctx.get("selected_schedule_id"):
+        return "Next step: Use /select to pick your active channel and schedule"
+
+    return None
+
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Welcome message with command overview."""
     await ensure_user_record(update, context)
@@ -87,6 +110,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 chat_id=update.effective_chat.id,
                 bot=context.bot,
             )
+
+        nudge = await _onboarding_nudge(user_id)
+        if nudge:
+            await update.message.reply_text(nudge)
 
         logger.info("Handled /start for user_id=%s", user_id)
     except Exception as e:

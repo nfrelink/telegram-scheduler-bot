@@ -130,7 +130,25 @@ async def select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             await query.answer("Channel not found.", show_alert=True)
             return
 
+        # Persist channel selection immediately so /schedules works
+        # even when the channel has no schedules yet.
+        await db.set_user_context(
+            user_id=user_id,
+            selected_channel_id=channel_db_id,
+            selected_schedule_id=None,
+        )
+
         text, keyboard = await _schedules_keyboard(channel_db_id)
+        if keyboard is None:
+            ch_name = next(
+                (
+                    str(c.get("channel_name") or c.get("telegram_channel_id") or f"Channel {channel_db_id}")
+                    for c in channels
+                    if int(c["id"]) == channel_db_id
+                ),
+                f"Channel {channel_db_id}",
+            )
+            text = f"Selected '{ch_name}'. This channel has no schedules yet.\n\nUse /schedules to create one."
         try:
             await query.edit_message_text(text, reply_markup=keyboard)
         except Exception:

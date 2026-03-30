@@ -49,12 +49,14 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     channel_name = message.chat.title or (f"@{message.chat.username}" if message.chat.username else telegram_channel_id)
 
     existing = await db.get_channel_by_telegram_id(telegram_channel_id)
+    channel_db_id: int
     if existing is None:
-        await db.create_channel(
+        channel = await db.create_channel(
             user_id=matched_user_id,
             telegram_channel_id=telegram_channel_id,
             channel_name=channel_name,
         )
+        channel_db_id = int(channel["id"])
     else:
         # If channel is already registered to someone else, do not reassign it.
         if int(existing["user_id"]) != matched_user_id:
@@ -73,9 +75,17 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
+        channel_db_id = int(existing["id"])
         # Keep channel_name fresh if it changed.
         if existing.get("channel_name") != channel_name:
-            await db.update_channel_name(int(existing["id"]), channel_name=channel_name)
+            await db.update_channel_name(channel_db_id, channel_name=channel_name)
+
+    # Auto-select the verified channel so /schedules works immediately.
+    await db.set_user_context(
+        user_id=matched_user_id,
+        selected_channel_id=channel_db_id,
+        selected_schedule_id=None,
+    )
 
     # Try to delete the verification message.
     deletion_msg = ""
@@ -86,13 +96,20 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.info("Could not delete verification message in channel %s: %s", telegram_channel_id, e)
         deletion_msg = "Please delete the verification message from the channel manually."
 
+    schedules = await db.get_channel_schedules(channel_db_id)
+    if schedules:
+        next_step = "Use /channels to manage your channels."
+    else:
+        next_step = "Next step: Create a posting schedule with /schedules"
+
     msg_text, msg_entities = render(
         [
             Segment("Channel '"),
             Segment(channel_name),
             Segment("' has been successfully verified.\n\n"),
             Segment(deletion_msg),
-            Segment("\n\nUse /channels to manage your channels."),
+            Segment("\n\n"),
+            Segment(next_step),
         ]
     )
     await context.bot.send_message(
