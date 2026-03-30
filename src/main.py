@@ -14,7 +14,7 @@ from typing import Final
 
 from dotenv import load_dotenv
 
-from bot import create_application
+from bot import create_application, register_commands
 from database import init_database
 from scheduler import start_scheduler
 
@@ -89,6 +89,7 @@ async def main() -> None:
 
     logger.info("Starting bot polling...")
     await application.initialize()
+    await register_commands(application)
     await application.start()
     scheduler_task = asyncio.create_task(start_scheduler(application.bot))
     await application.updater.start_polling(drop_pending_updates=True)

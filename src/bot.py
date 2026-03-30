@@ -40,9 +40,13 @@ USER_COMMANDS: list[BotCommand] = [
 ]
 
 
-async def _post_init(application: Application) -> None:
-    """Register the bot's command menu with Telegram on startup."""
-    await application.bot.set_my_commands(USER_COMMANDS)
+async def register_commands(application: Application) -> None:
+    """Register the bot's command menu with Telegram."""
+    try:
+        await application.bot.set_my_commands(USER_COMMANDS)
+        logger.info("Registered %d bot commands with Telegram", len(USER_COMMANDS))
+    except Exception:
+        logger.exception("Failed to register bot commands")
 
 
 def _safe_update_meta(update: object) -> dict[str, object]:
@@ -80,7 +84,7 @@ def create_application() -> Application:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
-    application = Application.builder().token(token).post_init(_post_init).build()
+    application = Application.builder().token(token).build()
 
     # Core user commands
     application.add_handler(CommandHandler("start", start_command))
