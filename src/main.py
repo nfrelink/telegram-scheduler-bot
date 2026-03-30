@@ -92,7 +92,7 @@ async def main() -> None:
     await register_commands(application)
     await application.start()
     scheduler_task = asyncio.create_task(start_scheduler(application.bot))
-    await application.updater.start_polling(drop_pending_updates=False)
+    await application.updater.start_polling(drop_pending_updates=True)
 
     try:
         await shutdown.wait()
