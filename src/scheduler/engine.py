@@ -214,7 +214,7 @@ async def _process_schedule(
 
     if ok:
         await db.increment_delivery_stats_daily(day=now.date(), posts_sent_delta=1)
-        await db.delete_queued_post(post_id)
+        await db.delete_queued_post(post_id, user_id=owner_user_id)
         await db.update_schedule_last_run(schedule_id)
         return
 
