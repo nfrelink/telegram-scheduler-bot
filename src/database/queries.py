@@ -320,18 +320,18 @@ async def get_channel_by_id(channel_db_id: int) -> dict[str, Any] | None:
         return _row_to_dict(row)
 
 
-async def delete_channel(channel_db_id: int) -> None:
+async def delete_channel(channel_db_id: int, *, user_id: int) -> None:
     """Delete channel (cascades to schedules and queued posts)."""
     async with transaction() as db:
-        await db.execute("DELETE FROM channels WHERE id = ?", (channel_db_id,))
+        await db.execute("DELETE FROM channels WHERE id = ? AND user_id = ?", (channel_db_id, user_id))
 
 
-async def update_channel_name(channel_db_id: int, *, channel_name: str) -> None:
+async def update_channel_name(channel_db_id: int, *, channel_name: str, user_id: int) -> None:
     """Update stored channel name/title."""
     async with transaction() as db:
         await db.execute(
-            "UPDATE channels SET channel_name = ? WHERE id = ?",
-            (channel_name, channel_db_id),
+            "UPDATE channels SET channel_name = ? WHERE id = ? AND user_id = ?",
+            (channel_name, channel_db_id, user_id),
         )
 
 
@@ -453,16 +453,19 @@ async def get_active_schedules() -> list[dict[str, Any]]:
         return schedules
 
 
-async def update_schedule_state(schedule_id: int, state: str) -> None:
+async def update_schedule_state(schedule_id: int, state: str, *, user_id: int) -> None:
     """Update schedule state."""
     async with transaction() as db:
         await db.execute(
-            "UPDATE schedules SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (state, schedule_id),
+            """
+            UPDATE schedules SET state = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
+            """,
+            (state, schedule_id, user_id),
         )
 
 
-async def resume_schedule(schedule_id: int) -> None:
+async def resume_schedule(schedule_id: int, *, user_id: int) -> None:
     """Set a schedule active and reset last_run_at to now.
 
     Resetting last_run_at ensures the next post fires at the next scheduled
@@ -476,36 +479,45 @@ async def resume_schedule(schedule_id: int) -> None:
             SET state = 'active',
                 last_run_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
+            WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
             """,
-            (schedule_id,),
+            (schedule_id, user_id),
         )
 
 
-async def update_schedule_pattern(schedule_id: int, pattern: dict[str, Any]) -> None:
+async def update_schedule_pattern(schedule_id: int, pattern: dict[str, Any], *, user_id: int) -> None:
     """Update schedule pattern JSON."""
     async with transaction() as db:
         await db.execute(
-            "UPDATE schedules SET pattern = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (json.dumps(pattern), schedule_id),
+            """
+            UPDATE schedules SET pattern = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
+            """,
+            (json.dumps(pattern), schedule_id, user_id),
         )
 
 
-async def update_schedule_name(schedule_id: int, *, name: str) -> None:
+async def update_schedule_name(schedule_id: int, *, name: str, user_id: int) -> None:
     """Update schedule name."""
     async with transaction() as db:
         await db.execute(
-            "UPDATE schedules SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (name, schedule_id),
+            """
+            UPDATE schedules SET name = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
+            """,
+            (name, schedule_id, user_id),
         )
 
 
-async def update_schedule_timezone(schedule_id: int, *, timezone_name: str) -> None:
+async def update_schedule_timezone(schedule_id: int, *, timezone_name: str, user_id: int) -> None:
     """Update schedule timezone (IANA name)."""
     async with transaction() as db:
         await db.execute(
-            "UPDATE schedules SET timezone = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (timezone_name, schedule_id),
+            """
+            UPDATE schedules SET timezone = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
+            """,
+            (timezone_name, schedule_id, user_id),
         )
 
 
@@ -518,10 +530,13 @@ async def update_schedule_last_run(schedule_id: int) -> None:
         )
 
 
-async def delete_schedule(schedule_id: int) -> None:
+async def delete_schedule(schedule_id: int, *, user_id: int) -> None:
     """Delete schedule (cascades to queued_posts)."""
     async with transaction() as db:
-        await db.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        await db.execute(
+            "DELETE FROM schedules WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)",
+            (schedule_id, user_id),
+        )
 
 
 # --- Queue ------------------------------------------------------------------
@@ -758,12 +773,18 @@ async def get_queue_count(schedule_id: int) -> int:
         return int(row[0])  # type: ignore[index]
 
 
-async def delete_queued_post(post_id: int) -> None:
+async def delete_queued_post(post_id: int, *, user_id: int) -> None:
     """Delete post from queue and compact positions for FIFO ordering."""
     async with transaction() as db:
         cursor = await db.execute(
-            "SELECT schedule_id, position FROM queued_posts WHERE id = ?",
-            (post_id,),
+            """
+            SELECT qp.schedule_id, qp.position
+            FROM queued_posts qp
+            JOIN schedules s ON qp.schedule_id = s.id
+            JOIN channels c ON s.channel_id = c.id
+            WHERE qp.id = ? AND c.user_id = ?
+            """,
+            (post_id, user_id),
         )
         row = await cursor.fetchone()
         if row is None:
@@ -857,21 +878,35 @@ async def get_earliest_pinned_at() -> Any:
         return row[0] if row else None  # type: ignore[index]
 
 
-async def set_post_pinned_at(post_id: int, pinned_at: datetime) -> None:
+async def set_post_pinned_at(post_id: int, pinned_at: datetime, *, user_id: int) -> None:
     """Pin a queued post to a specific send datetime."""
     async with transaction() as db:
         await db.execute(
-            "UPDATE queued_posts SET pinned_at = ? WHERE id = ?",
-            (to_sqlite_timestamp(pinned_at), post_id),
+            """
+            UPDATE queued_posts SET pinned_at = ?
+            WHERE id = ? AND schedule_id IN (
+                SELECT s.id FROM schedules s
+                JOIN channels c ON s.channel_id = c.id
+                WHERE c.user_id = ?
+            )
+            """,
+            (to_sqlite_timestamp(pinned_at), post_id, user_id),
         )
 
 
-async def clear_post_pinned_at(post_id: int) -> None:
+async def clear_post_pinned_at(post_id: int, *, user_id: int) -> None:
     """Remove the pinned_at datetime from a queued post, returning it to FIFO."""
     async with transaction() as db:
         await db.execute(
-            "UPDATE queued_posts SET pinned_at = NULL WHERE id = ?",
-            (post_id,),
+            """
+            UPDATE queued_posts SET pinned_at = NULL
+            WHERE id = ? AND schedule_id IN (
+                SELECT s.id FROM schedules s
+                JOIN channels c ON s.channel_id = c.id
+                WHERE c.user_id = ?
+            )
+            """,
+            (post_id, user_id),
         )
 
 

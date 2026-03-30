@@ -860,7 +860,7 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     # If it was empty_paused, it is no longer empty; keep it paused.
     if schedule.get("state") == "empty_paused":
-        await db.update_schedule_state(schedule_id, "paused")
+        await db.update_schedule_state(schedule_id, "paused", user_id=update.effective_user.id)
 
     _state_clear(context)
     details = await db.get_user_context_details(update.effective_user.id)

@@ -227,7 +227,7 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return _SHOWING
 
         ch_name = str(channel.get("channel_name") or f"Channel {ch_id}")
-        await db.delete_channel(ch_id)
+        await db.delete_channel(ch_id, user_id=user_id)
         logger.info("User %s removed channel db_id=%s (%s)", user_id, ch_id, ch_name)
 
         text, keyboard = await _channels_list_text_and_keyboard(user_id)

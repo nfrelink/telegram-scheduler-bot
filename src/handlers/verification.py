@@ -78,7 +78,7 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         channel_db_id = int(existing["id"])
         # Keep channel_name fresh if it changed.
         if existing.get("channel_name") != channel_name:
-            await db.update_channel_name(channel_db_id, channel_name=channel_name)
+            await db.update_channel_name(channel_db_id, channel_name=channel_name, user_id=matched_user_id)
 
     # Auto-select the verified channel so /schedules works immediately.
     await db.set_user_context(
