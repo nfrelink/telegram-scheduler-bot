@@ -13,7 +13,7 @@ from telegram.ext import ContextTypes
 
 from database import queries as db
 from handlers.common import ensure_user_record
-from utils.tg_text import Segment, render
+from utils.tg_text import Segment
 
 logger = logging.getLogger(__name__)
 

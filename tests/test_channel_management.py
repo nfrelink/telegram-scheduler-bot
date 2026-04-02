@@ -9,7 +9,6 @@ from database import queries as db
 from handlers.channel_management import (
     _channels_list_text_and_keyboard,
     channels_callback,
-    channels_command,
 )
 
 

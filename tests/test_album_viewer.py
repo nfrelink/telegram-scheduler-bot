@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from telegram import InputMediaDocument, InputMediaPhoto, InputMediaVideo
 
 from handlers.queue_management import _all_media_from_group

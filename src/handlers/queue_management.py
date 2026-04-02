@@ -18,7 +18,6 @@ from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandl
 from database import queries as db
 from database.time import parse_timestamp
 from handlers.common import ensure_user_record, parse_int
-from handlers.selection import selection_segments
 from scheduler.timing import calculate_next_run
 from utils.tg_text import Segment, render
 

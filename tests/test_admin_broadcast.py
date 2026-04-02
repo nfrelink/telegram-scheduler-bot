@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from telegram import MessageEntity
 
 from handlers import admin

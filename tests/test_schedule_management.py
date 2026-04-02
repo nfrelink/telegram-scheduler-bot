@@ -15,7 +15,6 @@ from handlers.schedule_management import (
     ES_WAIT_NAME,
     _schedules_list_text_and_keyboard,
     schedules_callback,
-    schedules_command,
     schedules_tz_handler,
     newschedule_set_name,
     newschedule_set_type,
