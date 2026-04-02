@@ -104,6 +104,15 @@ Pick a default channel + schedule once so that `/bulk` and `/queue` work without
 - `/queue` — paginated queue browser with inline navigation
 - `/deletepost <post_id>` — remove a single queued post
 
+### Pinned Posts
+
+Any queued post can be pinned to a specific date and time so it goes out ahead of the regular FIFO queue.
+
+- In `/queue`, tap **Set date** on a post, then enter a date (e.g. `25/12` or `25 Dec 2026`) and a time (e.g. `20:00`)
+- Pinned posts are sent at or shortly after the chosen time, before any regular queue posts
+- To remove the pin, tap **Clear date** in the queue browser
+- Times are interpreted in your configured timezone (set via `/timezone`)
+
 ### Forwarding Allowlist
 
 - `/forward` — manage the list of channels whose forwarded posts are passed through as native Telegram forwards during bulk upload
