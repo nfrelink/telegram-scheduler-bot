@@ -220,7 +220,7 @@ async def test_delete_schedule_removes_it_from_db(initialized_db) -> None:
     schedule_id = int(schedule["id"])
 
     assert await db.get_schedule(schedule_id) is not None
-    await db.delete_schedule(schedule_id)
+    await db.delete_schedule(schedule_id, user_id=user_id)
     assert await db.get_schedule(schedule_id) is None
 
 
@@ -230,7 +230,7 @@ async def test_delete_schedule_is_idempotent(initialized_db) -> None:
     ch, schedule, _ = await _make_schedule(user_id)
     schedule_id = int(schedule["id"])
 
-    await db.delete_schedule(schedule_id)
+    await db.delete_schedule(schedule_id, user_id=user_id)
     # Second delete should not raise.
-    await db.delete_schedule(schedule_id)
+    await db.delete_schedule(schedule_id, user_id=user_id)
     assert await db.get_schedule(schedule_id) is None

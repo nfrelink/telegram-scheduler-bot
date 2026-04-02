@@ -45,7 +45,7 @@ async def test_add_queued_posts_bulk_appends_and_compacts_positions(initialized_
     assert [int(p["position"]) for p in posts] == [0, 1, 2]
 
     # Delete the middle item and ensure positions compact.
-    await db.delete_queued_post(int(posts[1]["id"]))
+    await db.delete_queued_post(int(posts[1]["id"]), user_id=user_id)
     posts2 = await db.get_queued_posts(schedule_id, limit=10)
     assert [p["file_id"] for p in posts2] == ["a", "c"]
     assert [int(p["position"]) for p in posts2] == [0, 1]
