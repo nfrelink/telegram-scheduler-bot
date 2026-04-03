@@ -161,7 +161,7 @@ async def _process_schedule(
 
     ok, reason = validate_schedule_pattern(schedule.get("pattern") or {})
     if not ok:
-        await db.update_schedule_state(schedule_id, "paused")
+        await db.update_schedule_state(schedule_id, "paused", user_id=owner_user_id)
         await _notify_user(
             bot,
             owner_user_id,
@@ -232,7 +232,7 @@ async def _handle_empty_queue(bot: ExtBot, *, schedule: dict[str, Any], owner_us
     schedule_id = int(schedule["id"])
 
     # Avoid spamming: transition to empty_paused.
-    await db.update_schedule_state(schedule_id, "empty_paused")
+    await db.update_schedule_state(schedule_id, "empty_paused", user_id=owner_user_id)
 
     channel_name = schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
     schedule_name = schedule.get("name") or f"Schedule {schedule_id}"
@@ -282,7 +282,7 @@ async def _handle_post_failure(
         return
 
     # Stop the schedule to avoid repeated failures/spam; user can delete the post and resume.
-    await db.update_schedule_state(schedule_id, "paused")
+    await db.update_schedule_state(schedule_id, "paused", user_id=owner_user_id)
 
     channel_name = schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
     schedule_name = schedule.get("name") or f"Schedule {schedule_id}"
