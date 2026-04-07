@@ -2,6 +2,8 @@
 
 A Telegram bot for scheduling posts to multiple channels with flexible scheduling options.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/nfrelink/telegram-scheduler-bot)
+
 ## Features
 
 - **Flexible Scheduling**: Hourly (interval), daily, or weekly schedules
