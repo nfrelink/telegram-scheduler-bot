@@ -226,3 +226,89 @@ async def test_user_context_selection_roundtrip(initialized_db) -> None:
     assert ctx2["selected_channel_id"] is None
     assert ctx2["selected_schedule_id"] is None
 
+
+# --- Bulk staging ---
+
+
+@pytest.mark.asyncio
+async def test_bulk_staging_session_lifecycle(initialized_db) -> None:
+    user_id = 600
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+
+    assert await db.get_bulk_session(user_id) is None
+
+    await db.create_bulk_session(user_id, schedule_id=1, caption_mode="remove")
+    session = await db.get_bulk_session(user_id)
+    assert session is not None
+    assert session["caption_mode"] == "remove"
+    assert session["single_caption"] is None
+
+    await db.update_bulk_session_caption(user_id, caption_mode="single", single_caption="hello")
+    session2 = await db.get_bulk_session(user_id)
+    assert session2["caption_mode"] == "single"
+    assert session2["single_caption"] == "hello"
+
+    await db.clear_staging(user_id)
+    assert await db.get_bulk_session(user_id) is None
+
+
+@pytest.mark.asyncio
+async def test_bulk_staging_items_lifecycle(initialized_db) -> None:
+    user_id = 601
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+
+    assert await db.get_staging_count(user_id) == 0
+
+    await db.add_staging_item(user_id, media_type="photo", file_id="fid1")
+    await db.add_staging_item(user_id, media_type="video", file_id="fid2", media_group_id="mg1")
+    await db.add_staging_item(user_id, media_type="photo", file_id="fid3", media_group_id="mg1")
+
+    assert await db.get_staging_count(user_id) == 3
+
+    items = await db.get_staging_items(user_id)
+    assert len(items) == 3
+    assert items[0]["file_id"] == "fid1"
+    assert items[0]["media_group_id"] is None
+    assert items[1]["media_group_id"] == "mg1"
+    assert items[2]["media_group_id"] == "mg1"
+    # Positions are sequential
+    assert [items[i]["position"] for i in range(3)] == [0, 1, 2]
+
+    await db.clear_staging(user_id)
+    assert await db.get_staging_count(user_id) == 0
+
+
+@pytest.mark.asyncio
+async def test_bulk_staging_items_preserve_all_fields(initialized_db) -> None:
+    user_id = 602
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+
+    await db.add_staging_item(
+        user_id,
+        media_type="photo",
+        file_id="fwd_fid",
+        caption="cap",
+        caption_entities='[{"type": "bold"}]',
+        media_group_id="mg2",
+        forward_from_chat_id=111,
+        forward_from_message_id=222,
+        forward_origin_chat_id=333,
+        forward_origin_message_id=444,
+        raw_origin_chat_id=555,
+        raw_origin_message_id=666,
+        raw_origin_is_forwarded=True,
+    )
+
+    items = await db.get_staging_items(user_id)
+    assert len(items) == 1
+    item = items[0]
+    assert item["caption"] == "cap"
+    assert item["caption_entities"] == '[{"type": "bold"}]'
+    assert item["forward_from_chat_id"] == 111
+    assert item["forward_from_message_id"] == 222
+    assert item["forward_origin_chat_id"] == 333
+    assert item["forward_origin_message_id"] == 444
+    assert item["raw_origin_chat_id"] == 555
+    assert item["raw_origin_message_id"] == 666
+    assert item["raw_origin_is_forwarded"] == 1  # SQLite stores booleans as ints
+

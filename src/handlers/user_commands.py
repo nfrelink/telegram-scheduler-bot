@@ -54,6 +54,17 @@ def _onboarding_segments() -> list[Segment]:
     ]
 
 
+async def _pending_upload_nudge(user_id: int) -> str | None:
+    """Return a hint if the user has an interrupted bulk upload."""
+    session = await db.get_bulk_session(user_id)
+    if session is None:
+        return None
+    count = await db.get_staging_count(user_id)
+    if count <= 0:
+        return None
+    return f"You have {count} item(s) from an interrupted upload. Send /bulk to resume or discard them."
+
+
 async def _onboarding_nudge(user_id: int) -> str | None:
     """Return a contextual next-step hint, or None if setup is complete."""
     channels = await db.get_user_channels(user_id)
@@ -115,6 +126,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if nudge:
             await update.message.reply_text(nudge)
 
+        upload_nudge = await _pending_upload_nudge(user_id)
+        if upload_nudge:
+            await update.message.reply_text(upload_nudge)
+
         logger.info("Handled /start for user_id=%s", user_id)
     except Exception as e:
         logger.error("Error in start_command for user_id=%s: %s", user_id, e, exc_info=True)
@@ -137,7 +152,30 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         segments = [Segment(help_text), Segment("\n\n"), *selection_segments(details)]
         text, entities = render(segments)
         await update.message.reply_text(text, entities=entities)
-        return
+    else:
+        await update.message.reply_text(help_text)
 
-    await update.message.reply_text(help_text)
+    if update.effective_user:
+        upload_nudge = await _pending_upload_nudge(update.effective_user.id)
+        if upload_nudge:
+            await update.message.reply_text(upload_nudge)
+
+
+async def pending_media_nudge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Low-priority fallback: remind user about pending staging when they send
+    media outside of any active conversation (e.g. after a bot restart)."""
+    if update.effective_user is None or update.message is None:
+        return
+    if context.user_data.get("bulk_schedule_id") is not None:
+        return
+    session = await db.get_bulk_session(update.effective_user.id)
+    if session is None:
+        return
+    count = await db.get_staging_count(update.effective_user.id)
+    if count <= 0:
+        return
+    await update.message.reply_text(
+        f"This media was not added — no active upload session.\n"
+        f"You have {count} item(s) from a previous upload. Send /bulk to resume or discard them."
+    )
 

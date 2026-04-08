@@ -128,6 +128,41 @@ CREATE TABLE IF NOT EXISTS forward_origin_allowlist (
 
 CREATE INDEX IF NOT EXISTS idx_forward_origin_allowlist_user_id ON forward_origin_allowlist(user_id);
 
+-- Bulk upload staging: persists collected items so they survive bot restarts.
+-- Each row is a single media item; media groups share the same media_group_id.
+CREATE TABLE IF NOT EXISTS bulk_staging (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    media_type TEXT NOT NULL,
+    file_id TEXT,
+    caption TEXT,
+    caption_entities TEXT,
+    media_group_id TEXT,
+    forward_from_chat_id INTEGER,
+    forward_from_message_id INTEGER,
+    forward_origin_chat_id INTEGER,
+    forward_origin_message_id INTEGER,
+    raw_origin_chat_id INTEGER,
+    raw_origin_message_id INTEGER,
+    raw_origin_is_forwarded BOOLEAN DEFAULT FALSE,
+    position INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_bulk_staging_user ON bulk_staging(user_id);
+
+-- Bulk upload session metadata (one row per user with an active upload).
+CREATE TABLE IF NOT EXISTS bulk_upload_session (
+    user_id INTEGER PRIMARY KEY,
+    schedule_id INTEGER NOT NULL,
+    caption_mode TEXT NOT NULL,
+    single_caption TEXT,
+    single_caption_entities TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- Aggregated daily delivery stats (small table; one row per day)
 CREATE TABLE IF NOT EXISTS delivery_stats_daily (
     day TEXT PRIMARY KEY,  -- 'YYYY-MM-DD' in UTC

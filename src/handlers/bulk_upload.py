@@ -26,7 +26,7 @@ from utils.tg_text import Segment, render, utf16_len
 logger = logging.getLogger(__name__)
 
 
-SELECTING_CAPTION_MODE, WAITING_SINGLE_CAPTION, COLLECTING_MEDIA, CONFIRMING, DECIDING_SPLITS = range(5)
+SELECTING_CAPTION_MODE, WAITING_SINGLE_CAPTION, COLLECTING_MEDIA, CONFIRMING, DECIDING_SPLITS, RESUMING = range(6)
 
 
 @dataclass(frozen=True)
@@ -55,6 +55,99 @@ def _state_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
     for key in list(context.user_data.keys()):
         if key.startswith("bulk_"):
             context.user_data.pop(key, None)
+
+
+async def _clear_staging(user_id: int) -> None:
+    """Remove all staging data for a user (items + session)."""
+    await db.clear_staging(user_id)
+
+
+async def _persist_item_to_staging(user_id: int, item: _CollectedItem, *, media_group_id: str | None = None) -> None:
+    """Write-through: persist a collected item to the staging table."""
+    await db.add_staging_item(
+        user_id,
+        media_type=item.media_type,
+        file_id=item.file_id,
+        caption=item.caption,
+        caption_entities=json.dumps(item.caption_entities) if item.caption_entities else None,
+        media_group_id=media_group_id,
+        forward_from_chat_id=item.forward_from_chat_id,
+        forward_from_message_id=item.forward_from_message_id,
+        forward_origin_chat_id=item.forward_origin_chat_id,
+        forward_origin_message_id=item.forward_origin_message_id,
+        raw_origin_chat_id=item.raw_origin_chat_id,
+        raw_origin_message_id=item.raw_origin_message_id,
+        raw_origin_is_forwarded=item.raw_origin_is_forwarded,
+    )
+
+
+def _load_staging_into_user_data(
+    context: ContextTypes.DEFAULT_TYPE,
+    items: list[dict[str, Any]],
+    session: dict[str, Any],
+) -> None:
+    """Reconstruct user_data from staging DB rows + session metadata."""
+    context.user_data["bulk_schedule_id"] = session["schedule_id"]
+    context.user_data["bulk_caption_mode"] = session["caption_mode"]
+    if session.get("single_caption"):
+        context.user_data["bulk_single_caption"] = session["single_caption"]
+    if session.get("single_caption_entities"):
+        raw = session["single_caption_entities"]
+        context.user_data["bulk_single_caption_entities"] = (
+            json.loads(raw) if isinstance(raw, str) else raw
+        )
+
+    posts = _get_posts(context)
+    groups = _get_media_groups(context)
+    indexes = _get_media_group_indexes(context)
+
+    for row in items:
+        mg_id = row.get("media_group_id")
+        if mg_id:
+            cap_ents = row.get("caption_entities")
+            if isinstance(cap_ents, str):
+                cap_ents = json.loads(cap_ents)
+            collected = _CollectedItem(
+                media_type=row["media_type"],
+                file_id=row.get("file_id") or "",
+                caption=row.get("caption"),
+                caption_entities=cap_ents,
+                forward_from_chat_id=row.get("forward_from_chat_id"),
+                forward_from_message_id=row.get("forward_from_message_id"),
+                forward_origin_chat_id=row.get("forward_origin_chat_id"),
+                forward_origin_message_id=row.get("forward_origin_message_id"),
+                raw_origin_chat_id=row.get("raw_origin_chat_id"),
+                raw_origin_message_id=row.get("raw_origin_message_id"),
+                raw_origin_is_forwarded=bool(row.get("raw_origin_is_forwarded")),
+            )
+            groups.setdefault(mg_id, []).append(collected)
+            if mg_id not in indexes:
+                indexes[mg_id] = len(posts)
+                single_cap_ents = context.user_data.get("bulk_single_caption_entities")
+                posts.append({
+                    "media_type": "media_group",
+                    "file_id": None,
+                    "file_path": None,
+                    "caption": None,
+                    "caption_parse_mode": None,
+                    "caption_entities": json.dumps(single_cap_ents) if single_cap_ents else None,
+                    "media_group_data": None,
+                })
+        else:
+            cap_ents_str = row.get("caption_entities")
+            posts.append({
+                "media_type": row["media_type"],
+                "file_id": row.get("file_id"),
+                "file_path": None,
+                "caption": row.get("caption"),
+                "caption_parse_mode": None,
+                "caption_entities": cap_ents_str,
+                "forward_from_chat_id": row.get("forward_from_chat_id"),
+                "forward_from_message_id": row.get("forward_from_message_id"),
+                "forward_origin_chat_id": row.get("forward_origin_chat_id"),
+                "forward_origin_message_id": row.get("forward_origin_message_id"),
+                "media_group_data": None,
+            })
 
 
 def _get_caption_mode(context: ContextTypes.DEFAULT_TYPE) -> str | None:
@@ -522,6 +615,8 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Please run /bulk in a private chat with the bot.")
         return ConversationHandler.END
 
+    user_id = update.effective_user.id
+
     schedule_id: int | None = None
     used_selected = False
     if context.args and len(context.args) == 1:
@@ -531,7 +626,7 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await update.message.reply_text("Invalid schedule id.")
             return ConversationHandler.END
     else:
-        user_ctx = await db.get_user_context(update.effective_user.id)
+        user_ctx = await db.get_user_context(user_id)
         raw = user_ctx.get("selected_schedule_id")
         schedule_id = int(raw) if raw is not None else None
         used_selected = True
@@ -543,22 +638,42 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
-    schedule = await db.get_schedule_for_user(update.effective_user.id, schedule_id)
+    schedule = await db.get_schedule_for_user(user_id, schedule_id)
     if schedule is None:
         await update.message.reply_text("Schedule not found or not owned by you.")
         return ConversationHandler.END
 
     if not used_selected:
         await db.set_user_context(
-            user_id=update.effective_user.id,
+            user_id=user_id,
             selected_channel_id=int(schedule["channel_id"]),
             selected_schedule_id=schedule_id,
         )
 
+    # Check for a pending staging session from a previous (interrupted) upload.
+    pending_session = await db.get_bulk_session(user_id)
+    if pending_session and int(pending_session["schedule_id"]) == schedule_id:
+        pending_count = await db.get_staging_count(user_id)
+        if pending_count > 0:
+            _state_clear(context)
+            context.user_data["bulk_schedule_id"] = schedule_id
+            await update.message.reply_text(
+                f"You have {pending_count} item(s) from a previous upload.\n"
+                "Resume or start fresh?",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("Resume", callback_data="bulk_resume:yes"),
+                    InlineKeyboardButton("Start fresh", callback_data="bulk_resume:no"),
+                ]]),
+            )
+            return RESUMING
+
+    # No pending session or different schedule — clear any stale staging data.
+    await _clear_staging(user_id)
+
     _state_clear(context)
     context.user_data["bulk_schedule_id"] = schedule_id
 
-    details = await db.get_user_context_details(update.effective_user.id)
+    details = await db.get_user_context_details(user_id)
     schedule_name = str(details.get("schedule_name") or schedule.get("name") or f"Schedule {schedule_id}")
     segments = [
         Segment(f"Bulk upload started for schedule '{schedule_name}'.\n\n"),
@@ -579,9 +694,67 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return SELECTING_CAPTION_MODE
 
 
+async def bulk_resume_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle the resume/discard decision for a pending staging session."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return RESUMING
+
+    await query.answer()
+    user_id = update.effective_user.id
+    data = query.data or ""
+
+    if data == "bulk_resume:yes":
+        session = await db.get_bulk_session(user_id)
+        items = await db.get_staging_items(user_id)
+        if not session or not items:
+            try:
+                await query.edit_message_text("Session expired. Starting fresh — run /bulk again.")
+            except Exception:
+                pass
+            await _clear_staging(user_id)
+            _state_clear(context)
+            return ConversationHandler.END
+
+        _state_clear(context)
+        _load_staging_into_user_data(context, items, session)
+        posts = _get_posts(context)
+        try:
+            await query.edit_message_text(
+                f"Resumed {len(items)} item(s) ({len(posts)} post(s)).\n"
+                "Send more media, or /done to finish."
+            )
+        except Exception:
+            pass
+        return COLLECTING_MEDIA
+
+    # "Start fresh"
+    await _clear_staging(user_id)
+    schedule_id = context.user_data.get("bulk_schedule_id")
+    _state_clear(context)
+    context.user_data["bulk_schedule_id"] = schedule_id
+    details = await db.get_user_context_details(user_id)
+    schedule_name = str(details.get("schedule_name") or f"Schedule {schedule_id}")
+    segments = [
+        Segment(f"Bulk upload started for schedule '{schedule_name}'.\n\n"),
+        *selection_segments(details),
+        Segment("\n\nChoose caption mode by replying with one of:\n"),
+        Segment("- remove (strip all captions)\n"),
+        Segment("- single (use one caption for all posts)\n"),
+        Segment("- preserve (keep each post's original caption and formatting)\n\n"),
+        Segment("Or /cancel to stop."),
+    ]
+    text, entities = render(segments)
+    try:
+        await query.edit_message_text(text, entities=entities)
+    except Exception:
+        pass
+    return SELECTING_CAPTION_MODE
+
+
 async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
-    if update.message is None:
+    if update.message is None or update.effective_user is None:
         return ConversationHandler.END
 
     raw = (update.message.text or "").strip().lower()
@@ -593,6 +766,15 @@ async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TY
         return SELECTING_CAPTION_MODE
 
     context.user_data["bulk_caption_mode"] = raw
+
+    schedule_id = context.user_data.get("bulk_schedule_id")
+    if schedule_id is not None:
+        await db.create_bulk_session(
+            update.effective_user.id,
+            schedule_id=int(schedule_id),
+            caption_mode=raw,
+        )
+
     if raw == "single":
         await update.message.reply_text("Send the single caption to apply to all posts.")
         return WAITING_SINGLE_CAPTION
@@ -607,7 +789,7 @@ async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def bulk_set_single_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
-    if update.message is None:
+    if update.message is None or update.effective_user is None:
         return ConversationHandler.END
 
     raw_text = update.message.text or ""
@@ -629,6 +811,13 @@ async def bulk_set_single_caption(update: Update, context: ContextTypes.DEFAULT_
         context.user_data["bulk_single_caption_entities"] = caption_entities
     else:
         context.user_data.pop("bulk_single_caption_entities", None)
+
+    await db.update_bulk_session_caption(
+        update.effective_user.id,
+        caption_mode="single",
+        single_caption=caption_text,
+        single_caption_entities=json.dumps(caption_entities) if caption_entities else None,
+    )
 
     await update.message.reply_text(
         "Caption saved.\n"
@@ -695,6 +884,8 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 }
             )
 
+        await _persist_item_to_staging(update.effective_user.id, item, media_group_id=group_id)
+
         await update.message.reply_text(
             f"Added media group item. Total collected posts: {len(posts)}.\n"
             "Send more, or /done to finish."
@@ -717,6 +908,8 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "media_group_data": None,
         }
     )
+
+    await _persist_item_to_staging(update.effective_user.id, item)
 
     await update.message.reply_text(
         f"Added {item.media_type}. Total collected posts: {len(posts)}.\n"
@@ -862,6 +1055,7 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if schedule.get("state") == "empty_paused":
         await db.update_schedule_state(schedule_id, "paused", user_id=update.effective_user.id)
 
+    await _clear_staging(update.effective_user.id)
     _state_clear(context)
     details = await db.get_user_context_details(update.effective_user.id)
     sched_name = str(schedule.get("name") or f"Schedule {schedule_id}")
@@ -948,6 +1142,8 @@ async def bulk_split_decision(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def bulk_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await ensure_user_record(update, context)
+    if update.effective_user:
+        await _clear_staging(update.effective_user.id)
     _state_clear(context)
     if update.message:
         await update.message.reply_text("Cancelled.")
@@ -957,6 +1153,10 @@ async def bulk_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 bulk_upload_conversation_handler = ConversationHandler(
     entry_points=[CommandHandler("bulk", bulk_start)],
     states={
+        RESUMING: [
+            CallbackQueryHandler(bulk_resume_decision, pattern=r"^bulk_resume:"),
+            CommandHandler("cancel", bulk_cancel),
+        ],
         SELECTING_CAPTION_MODE: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_set_caption_mode),
         ],

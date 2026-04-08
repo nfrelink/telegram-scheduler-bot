@@ -21,7 +21,7 @@ from handlers.queue_management import (
 from handlers.schedule_management import schedules_conversation_handler
 from handlers.selection import select_callback, select_command
 from handlers.timezone_management import gettimezone_command, settimezone_command, timezone_callback, timezone_command
-from handlers.user_commands import help_command, start_command
+from handlers.user_commands import help_command, pending_media_nudge, start_command
 from handlers.verification import channel_post_handler
 
 logger = logging.getLogger(__name__)
@@ -126,6 +126,16 @@ def create_application() -> Application:
     application.add_handler(CommandHandler("debug", debug_command))
     application.add_handler(CommandHandler("stats", stats_command))
     application.add_handler(CommandHandler("broadcast", broadcast_command))
+
+    # Low-priority fallback: nudge users with pending staging data when they
+    # send media outside of any active conversation (e.g. after a bot restart).
+    application.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
+            pending_media_nudge,
+        ),
+        group=99,
+    )
 
     application.add_error_handler(error_handler)
     return application

@@ -10,7 +10,10 @@ import os
 import re
 import signal
 import sys
+import warnings
 from typing import Final
+
+warnings.filterwarnings("ignore", message=r".*per_message=False.*", category=UserWarning)
 
 from dotenv import load_dotenv
 

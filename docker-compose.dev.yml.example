@@ -9,6 +9,7 @@ services:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - LOG_LEVEL=DEBUG
     volumes:
       - ./src:/app/src:ro
       - ./scripts:/app/scripts:ro

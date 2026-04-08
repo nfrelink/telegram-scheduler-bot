@@ -1053,6 +1053,125 @@ async def get_delivery_stats_sum_since(*, since_day: date) -> dict[str, int]:
         }
 
 
+# --- Bulk upload staging ---------------------------------------------------
+
+
+async def create_bulk_session(
+    user_id: int,
+    schedule_id: int,
+    caption_mode: str,
+    single_caption: str | None = None,
+    single_caption_entities: str | None = None,
+) -> None:
+    """Create or replace a bulk upload session for a user."""
+    async with transaction() as db:
+        await db.execute(
+            """
+            INSERT OR REPLACE INTO bulk_upload_session
+                (user_id, schedule_id, caption_mode, single_caption, single_caption_entities)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, schedule_id, caption_mode, single_caption, single_caption_entities),
+        )
+
+
+async def get_bulk_session(user_id: int) -> dict[str, Any] | None:
+    """Return the active bulk upload session for a user, or None."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT * FROM bulk_upload_session WHERE user_id = ?", (user_id,)
+        )
+        return _row_to_dict(await cursor.fetchone())
+
+
+async def update_bulk_session_caption(
+    user_id: int,
+    caption_mode: str,
+    single_caption: str | None = None,
+    single_caption_entities: str | None = None,
+) -> None:
+    """Update caption settings on an existing bulk session."""
+    async with transaction() as db:
+        await db.execute(
+            """
+            UPDATE bulk_upload_session
+            SET caption_mode = ?, single_caption = ?, single_caption_entities = ?
+            WHERE user_id = ?
+            """,
+            (caption_mode, single_caption, single_caption_entities, user_id),
+        )
+
+
+async def add_staging_item(
+    user_id: int,
+    *,
+    media_type: str,
+    file_id: str | None = None,
+    caption: str | None = None,
+    caption_entities: str | None = None,
+    media_group_id: str | None = None,
+    forward_from_chat_id: int | None = None,
+    forward_from_message_id: int | None = None,
+    forward_origin_chat_id: int | None = None,
+    forward_origin_message_id: int | None = None,
+    raw_origin_chat_id: int | None = None,
+    raw_origin_message_id: int | None = None,
+    raw_origin_is_forwarded: bool = False,
+) -> None:
+    """Persist a collected media item to the staging table."""
+    async with transaction() as db:
+        cursor = await db.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM bulk_staging WHERE user_id = ?",
+            (user_id,),
+        )
+        pos = int((await cursor.fetchone())[0])  # type: ignore[index]
+        await db.execute(
+            """
+            INSERT INTO bulk_staging
+                (user_id, media_type, file_id, caption, caption_entities,
+                 media_group_id, forward_from_chat_id, forward_from_message_id,
+                 forward_origin_chat_id, forward_origin_message_id,
+                 raw_origin_chat_id, raw_origin_message_id,
+                 raw_origin_is_forwarded, position)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id, media_type, file_id, caption, caption_entities,
+                media_group_id, forward_from_chat_id, forward_from_message_id,
+                forward_origin_chat_id, forward_origin_message_id,
+                raw_origin_chat_id, raw_origin_message_id,
+                raw_origin_is_forwarded, pos,
+            ),
+        )
+
+
+async def get_staging_items(user_id: int) -> list[dict[str, Any]]:
+    """Return all staging items for a user, ordered by position."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT * FROM bulk_staging WHERE user_id = ? ORDER BY position",
+            (user_id,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+
+async def get_staging_count(user_id: int) -> int:
+    """Return the number of staged items for a user."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM bulk_staging WHERE user_id = ?", (user_id,)
+        )
+        return int((await cursor.fetchone())[0])  # type: ignore[index]
+
+
+async def clear_staging(user_id: int) -> None:
+    """Delete all staging items and the session for a user."""
+    async with transaction() as db:
+        await db.execute("DELETE FROM bulk_staging WHERE user_id = ?", (user_id,))
+        await db.execute("DELETE FROM bulk_upload_session WHERE user_id = ?", (user_id,))
+
+
 # --- Ownership-checked channel lookups ------------------------------------
 
 
