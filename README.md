@@ -64,6 +64,24 @@ A Telegram bot for scheduling posts to multiple channels with flexible schedulin
    docker compose logs -f
    ```
 
+## Configuration
+
+All settings are configured via environment variables (see `.env.example`). Required:
+
+- `TELEGRAM_BOT_TOKEN` — Bot token from @BotFather
+- `ADMIN_USER_ID` — Your Telegram user ID
+
+Optional tuning:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DATABASE_PATH` | `data/scheduler.db` | Path to the SQLite database file |
+| `LOG_LEVEL` | `INFO` | Python log level |
+| `SCHEDULER_CHECK_INTERVAL` | `60` | Seconds between scheduler ticks |
+| `DEFAULT_TIMEZONE` | `UTC` | Fallback timezone for new users |
+| `CATCHUP_MAX_RUNS_PER_SCHEDULE` | `5` | Max posts to catch up per schedule after downtime |
+| `CATCHUP_SPACING_SECONDS` | `30` | Seconds between catch-up posts |
+
 ## Usage
 
 Everything is wizard-driven. Send a command and follow the inline buttons or prompts — no need to memorise IDs or syntax.

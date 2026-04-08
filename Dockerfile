@@ -28,9 +28,9 @@ RUN useradd -m -u 1000 botuser \
     && chown -R botuser:botuser /app
 USER botuser
 
-# Health check: ensure DB file is readable/openable
+# Health check: verify DB is openable and Telegram API is reachable
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import os, sqlite3; p=os.getenv('DATABASE_PATH','data/scheduler.db'); sqlite3.connect(p).close()" || exit 1
+    CMD python scripts/healthcheck.py
 
 CMD ["python", "-u", "src/main.py"]
 

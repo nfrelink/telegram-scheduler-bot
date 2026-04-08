@@ -212,7 +212,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         except Exception as e:
             failed += 1
             logger.error("Broadcast failed for user_id=%s: %s", user_id, e, exc_info=True)
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.1)
 
     await update.message.reply_text(f"Broadcast complete. Success: {ok}. Failed: {failed}.")
 
