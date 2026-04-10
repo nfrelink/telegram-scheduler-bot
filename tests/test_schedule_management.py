@@ -17,7 +17,6 @@ from handlers.schedule_management import (
     ES_WAIT_NAME,
     ES_WAIT_TYPE,
     ES_WAIT_WEEKLY_DAYS,
-    ES_WAIT_WEEKLY_TIMES,
     NS_WAIT_DAILY_TIMES,
     NS_WAIT_INTERVAL,
     NS_WAIT_NAME,
