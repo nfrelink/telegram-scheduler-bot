@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import logging
 import os
+import time
 
 from telegram import BotCommand
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
@@ -25,6 +27,9 @@ from handlers.user_commands import help_command, pending_media_nudge, start_comm
 from handlers.verification import channel_post_handler
 
 logger = logging.getLogger(__name__)
+_TELEGRAM_TEXT_LIMIT = 4096
+_DEFAULT_ADMIN_ERROR_DM_DEBOUNCE_SECONDS = 60
+_ADMIN_ERROR_DM_LAST_SENT: dict[str, float] = {}
 
 USER_COMMANDS: list[BotCommand] = [
     BotCommand("start", "Start the bot"),
@@ -49,6 +54,49 @@ async def register_commands(application: Application) -> None:
         logger.exception("Failed to register bot commands")
 
 
+def _get_admin_user_id() -> int | None:
+    raw = os.getenv("ADMIN_USER_ID")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("ADMIN_USER_ID is not an integer")
+        return None
+
+
+def _get_admin_error_dm_debounce_seconds() -> int:
+    raw = os.getenv("ADMIN_ERROR_DM_DEBOUNCE_SECONDS")
+    if not raw:
+        return _DEFAULT_ADMIN_ERROR_DM_DEBOUNCE_SECONDS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logger.warning("ADMIN_ERROR_DM_DEBOUNCE_SECONDS is not an integer")
+        return _DEFAULT_ADMIN_ERROR_DM_DEBOUNCE_SECONDS
+
+
+def _error_signature(err: Exception | None) -> str:
+    error_type = type(err).__name__ if err is not None else "UnknownError"
+    error_message = str(err).strip() if err is not None else ""
+    return f"{error_type}:{error_message}"
+
+
+def _should_send_admin_error_dm(err: Exception | None) -> bool:
+    debounce_seconds = _get_admin_error_dm_debounce_seconds()
+    if debounce_seconds <= 0:
+        return True
+
+    signature = _error_signature(err)
+    now = time.monotonic()
+    last_sent_at = _ADMIN_ERROR_DM_LAST_SENT.get(signature)
+    if last_sent_at is not None and (now - last_sent_at) < debounce_seconds:
+        return False
+
+    _ADMIN_ERROR_DM_LAST_SENT[signature] = now
+    return True
+
+
 def _safe_update_meta(update: object) -> dict[str, object]:
     """Extract minimal, non-content metadata for logging."""
     meta: dict[str, object] = {"type": type(update).__name__}
@@ -68,6 +116,27 @@ def _safe_update_meta(update: object) -> dict[str, object]:
     return meta
 
 
+def _format_admin_error_notification(meta: dict[str, object], err: Exception | None) -> str:
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    error_type = type(err).__name__ if err is not None else "UnknownError"
+    error_message = str(err).strip() if err is not None else ""
+    if not error_message:
+        error_message = "(no error message)"
+
+    msg = (
+        f"Unhandled bot error ({now_utc} UTC)\n"
+        f"- type: {error_type}\n"
+        f"- message: {error_message}\n"
+        f"- update_id: {meta.get('update_id')}\n"
+        f"- user_id: {meta.get('user_id')}\n"
+        f"- chat_id: {meta.get('chat_id')}\n"
+        f"- message_id: {meta.get('message_id')}"
+    )
+    if len(msg) <= _TELEGRAM_TEXT_LIMIT:
+        return msg
+    return msg[: _TELEGRAM_TEXT_LIMIT - 3] + "..."
+
+
 async def error_handler(update: object, context) -> None:  # type: ignore[no-untyped-def]
     """Global error handler."""
     meta = _safe_update_meta(update)
@@ -76,6 +145,19 @@ async def error_handler(update: object, context) -> None:  # type: ignore[no-unt
         meta,
         exc_info=context.error,
     )
+    admin_user_id = _get_admin_user_id()
+    if admin_user_id is None:
+        return
+
+    if not _should_send_admin_error_dm(context.error):
+        logger.debug("Suppressed duplicate admin error DM (debounce active)")
+        return
+
+    try:
+        text = _format_admin_error_notification(meta, context.error)
+        await context.bot.send_message(chat_id=admin_user_id, text=text)
+    except Exception:
+        logger.exception("Failed to send admin error notification")
 
 
 def create_application() -> Application:
