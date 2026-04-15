@@ -163,6 +163,24 @@ CREATE TABLE IF NOT EXISTS bulk_upload_session (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- Media fingerprints for duplicate detection.
+-- Stores file_unique_id (all media) and dhash (photos only) per channel.
+CREATE TABLE IF NOT EXISTS media_fingerprints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel_id INTEGER NOT NULL,
+    file_unique_id TEXT,
+    dhash TEXT,
+    file_id TEXT,
+    media_type TEXT,
+    queued_post_id INTEGER,
+    posted_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_fingerprints_channel ON media_fingerprints(channel_id);
+CREATE INDEX IF NOT EXISTS idx_media_fingerprints_file_unique ON media_fingerprints(channel_id, file_unique_id);
+
 -- Aggregated daily delivery stats (small table; one row per day)
 CREATE TABLE IF NOT EXISTS delivery_stats_daily (
     day TEXT PRIMARY KEY,  -- 'YYYY-MM-DD' in UTC
@@ -223,6 +241,13 @@ async def _apply_migrations(db) -> None:  # type: ignore[no-untyped-def]
         (
             "20260316_add_forward_origin_allowlist_channel_name",
             [("forward_origin_allowlist", "origin_channel_name", "TEXT")],
+        ),
+        (
+            "20260415_add_duplicate_detection_settings",
+            [
+                ("channels", "duplicate_detection_enabled", "INTEGER DEFAULT 0"),
+                ("users", "duplicate_alerts_enabled", "INTEGER DEFAULT 1"),
+            ],
         ),
     ]
 

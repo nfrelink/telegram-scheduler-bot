@@ -25,6 +25,7 @@ def _help_text() -> str:
         "- /channels — Add or remove channels\n"
         "- /schedules — Create, edit, and manage schedules\n"
         "- /forward — Manage native-forwarding allowlist\n"
+        "- /duplicates — Manage duplicate detection settings\n"
         "\n"
         "Bulk upload:\n"
         "- /bulk [schedule_id] — Start queuing posts\n"

@@ -604,7 +604,7 @@ async def add_queued_post(
         )
 
 
-async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -> int:
+async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -> tuple[int, list[int]]:
     """Add multiple queued posts in one transaction.
 
     Args:
@@ -623,10 +623,10 @@ async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -
             - media_group_data (optional)
 
     Returns:
-        Number of inserted posts.
+        Tuple of (number of inserted posts, list of inserted post IDs).
     """
     if not posts:
-        return 0
+        return 0, []
 
     async with transaction() as db:
         cursor = await db.execute(
@@ -635,9 +635,29 @@ async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -
         )
         start_position = int((await cursor.fetchone())[0])  # type: ignore[index]
 
-        rows: list[tuple[Any, ...]] = []
+        inserted_ids: list[int] = []
         for i, post in enumerate(posts):
-            rows.append(
+            cursor = await db.execute(
+                """
+                INSERT INTO queued_posts
+                    (
+                        schedule_id,
+                        file_id,
+                        file_path,
+                        media_type,
+                        caption,
+                        caption_parse_mode,
+                        caption_entities,
+                        forward_from_chat_id,
+                        forward_from_message_id,
+                        forward_origin_chat_id,
+                        forward_origin_message_id,
+                        media_group_data,
+                        position
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                RETURNING id
+                """,
                 (
                     schedule_id,
                     post.get("file_id"),
@@ -652,33 +672,12 @@ async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -
                     post.get("forward_origin_message_id"),
                     post.get("media_group_data"),
                     start_position + i,
-                )
+                ),
             )
+            row = await cursor.fetchone()
+            inserted_ids.append(int(row[0]))  # type: ignore[index]
 
-        await db.executemany(
-            """
-            INSERT INTO queued_posts
-                (
-                    schedule_id,
-                    file_id,
-                    file_path,
-                    media_type,
-                    caption,
-                    caption_parse_mode,
-                    caption_entities,
-                    forward_from_chat_id,
-                    forward_from_message_id,
-                    forward_origin_chat_id,
-                    forward_origin_message_id,
-                    media_group_data,
-                    position
-                )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            rows,
-        )
-
-    return len(posts)
+    return len(posts), inserted_ids
 
 
 async def get_next_queued_post(schedule_id: int, *, now: datetime) -> dict[str, Any] | None:
@@ -1170,6 +1169,176 @@ async def clear_staging(user_id: int) -> None:
     async with transaction() as db:
         await db.execute("DELETE FROM bulk_staging WHERE user_id = ?", (user_id,))
         await db.execute("DELETE FROM bulk_upload_session WHERE user_id = ?", (user_id,))
+
+
+# --- Media fingerprints (duplicate detection) -----------------------------
+
+
+async def get_channel_duplicate_detection(channel_db_id: int) -> bool:
+    """Return True if duplicate detection is enabled for a channel."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT duplicate_detection_enabled FROM channels WHERE id = ?",
+            (channel_db_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return False
+        return bool(row[0])  # type: ignore[index]
+
+
+async def set_channel_duplicate_detection(channel_db_id: int, *, enabled: bool) -> None:
+    """Enable or disable duplicate detection for a channel."""
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE channels SET duplicate_detection_enabled = ? WHERE id = ?",
+            (int(enabled), channel_db_id),
+        )
+
+
+async def get_user_duplicate_alerts(user_id: int) -> bool:
+    """Return True if duplicate alerts are enabled for a user (default True)."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT duplicate_alerts_enabled FROM users WHERE id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return True
+        val = row[0]  # type: ignore[index]
+        return val is None or bool(val)
+
+
+async def set_user_duplicate_alerts(user_id: int, *, enabled: bool) -> None:
+    """Enable or disable duplicate alerts for a user."""
+    async with transaction() as db:
+        await db.execute(
+            "UPDATE users SET duplicate_alerts_enabled = ? WHERE id = ?",
+            (int(enabled), user_id),
+        )
+
+
+async def find_fingerprint_by_file_unique_id(
+    channel_db_id: int, file_unique_id: str
+) -> dict[str, Any] | None:
+    """Find a fingerprint by exact file_unique_id match for a channel."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT * FROM media_fingerprints
+            WHERE channel_id = ? AND file_unique_id = ?
+            LIMIT 1
+            """,
+            (channel_db_id, file_unique_id),
+        )
+        return _row_to_dict(await cursor.fetchone())
+
+
+async def get_channel_dhashes(channel_db_id: int) -> list[tuple[int, int]]:
+    """Return all (fingerprint_id, dhash_int) pairs for a channel.
+
+    Only returns rows that have a non-NULL dhash value (photos).
+    """
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT id, dhash FROM media_fingerprints WHERE channel_id = ? AND dhash IS NOT NULL",
+            (channel_db_id,),
+        )
+        rows = await cursor.fetchall()
+        return [(int(r[0]), int(r[1])) for r in rows]  # type: ignore[index]
+
+
+async def get_fingerprint(fingerprint_id: int) -> dict[str, Any] | None:
+    """Get a single fingerprint by its ID."""
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT * FROM media_fingerprints WHERE id = ?", (fingerprint_id,)
+        )
+        return _row_to_dict(await cursor.fetchone())
+
+
+async def add_fingerprints_bulk(
+    channel_db_id: int, items: list[dict[str, Any]]
+) -> list[int]:
+    """Insert multiple fingerprints and return their IDs.
+
+    Each item dict should have keys: file_unique_id, dhash, file_id,
+    media_type, queued_post_id.
+    """
+    if not items:
+        return []
+
+    ids: list[int] = []
+    async with transaction() as db:
+        for item in items:
+            cursor = await db.execute(
+                """
+                INSERT INTO media_fingerprints
+                    (channel_id, file_unique_id, dhash, file_id, media_type, queued_post_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    channel_db_id,
+                    item.get("file_unique_id"),
+                    item.get("dhash"),
+                    item.get("file_id"),
+                    item.get("media_type"),
+                    item.get("queued_post_id"),
+                ),
+            )
+            ids.append(cursor.lastrowid)  # type: ignore[arg-type]
+    return ids
+
+
+async def mark_fingerprint_posted(queued_post_id: int) -> None:
+    """Set posted_at on fingerprints linked to a queued post."""
+    async with transaction() as db:
+        await db.execute(
+            """
+            UPDATE media_fingerprints
+            SET posted_at = CURRENT_TIMESTAMP
+            WHERE queued_post_id = ?
+            """,
+            (queued_post_id,),
+        )
+
+
+async def delete_unposted_fingerprints(queued_post_id: int) -> None:
+    """Delete fingerprints for a queued post that was never posted."""
+    async with transaction() as db:
+        await db.execute(
+            """
+            DELETE FROM media_fingerprints
+            WHERE queued_post_id = ? AND posted_at IS NULL
+            """,
+            (queued_post_id,),
+        )
+
+
+async def remove_staging_item_by_position(user_id: int, position: int) -> None:
+    """Remove a single staging item by position and compact remaining positions."""
+    async with transaction() as db:
+        await db.execute(
+            "DELETE FROM bulk_staging WHERE user_id = ? AND position = ?",
+            (user_id, position),
+        )
+        await db.execute(
+            """
+            UPDATE bulk_staging SET position = position - 1
+            WHERE user_id = ? AND position > ?
+            """,
+            (user_id, position),
+        )
+
+
+async def remove_staging_items_by_file_id(user_id: int, file_id: str) -> None:
+    """Remove staging items matching a specific file_id."""
+    async with transaction() as db:
+        await db.execute(
+            "DELETE FROM bulk_staging WHERE user_id = ? AND file_id = ?",
+            (user_id, file_id),
+        )
 
 
 # --- Ownership-checked channel lookups ------------------------------------

@@ -21,6 +21,7 @@ from telegram.ext import (
 from database import queries as db
 from handlers.common import ensure_user_record
 from handlers.selection import selection_segments
+from utils.image_hash import compute_dhash, find_similar
 from utils.tg_text import Segment, render, utf16_len
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class _CollectedItem:
 
     media_type: str
     file_id: str
+    file_unique_id: str
     caption: str | None
     caption_entities: list[dict[str, Any]] | None
     forward_from_chat_id: int | None
@@ -49,6 +51,8 @@ class _CollectedItem:
     # True if the message was forwarded from any source (channel or person).
     # Distinct from raw_origin_chat_id which is only set for channel forwards.
     raw_origin_is_forwarded: bool = False
+    # Telegram message_id of the user's message, for reply-to in decision prompts.
+    user_message_id: int | None = None
 
 
 def _state_clear(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -110,6 +114,7 @@ def _load_staging_into_user_data(
             collected = _CollectedItem(
                 media_type=row["media_type"],
                 file_id=row.get("file_id") or "",
+                file_unique_id=row.get("file_unique_id") or "",
                 caption=row.get("caption"),
                 caption_entities=cap_ents,
                 forward_from_chat_id=row.get("forward_from_chat_id"),
@@ -357,11 +362,14 @@ def _message_to_collected_item(
             except (TypeError, ValueError):
                 pass
 
+    msg_id = getattr(message, "message_id", None)
+
     if message.photo:
-        file_id = message.photo[-1].file_id
+        largest = message.photo[-1]
         return _CollectedItem(
             media_type="photo",
-            file_id=file_id,
+            file_id=largest.file_id,
+            file_unique_id=largest.file_unique_id,
             caption=caption,
             caption_entities=caption_entities,
             forward_from_chat_id=forward_from_chat_id,
@@ -371,12 +379,14 @@ def _message_to_collected_item(
             raw_origin_chat_id=raw_origin_chat_id,
             raw_origin_message_id=raw_origin_msg_id,
             raw_origin_is_forwarded=raw_origin_is_forwarded,
+            user_message_id=msg_id,
         )
 
     if message.video:
         return _CollectedItem(
             media_type="video",
             file_id=message.video.file_id,
+            file_unique_id=message.video.file_unique_id,
             caption=caption,
             caption_entities=caption_entities,
             forward_from_chat_id=forward_from_chat_id,
@@ -386,12 +396,14 @@ def _message_to_collected_item(
             raw_origin_chat_id=raw_origin_chat_id,
             raw_origin_message_id=raw_origin_msg_id,
             raw_origin_is_forwarded=raw_origin_is_forwarded,
+            user_message_id=msg_id,
         )
 
     if message.document:
         return _CollectedItem(
             media_type="document",
             file_id=message.document.file_id,
+            file_unique_id=message.document.file_unique_id,
             caption=caption,
             caption_entities=caption_entities,
             forward_from_chat_id=forward_from_chat_id,
@@ -401,6 +413,7 @@ def _message_to_collected_item(
             raw_origin_chat_id=raw_origin_chat_id,
             raw_origin_message_id=raw_origin_msg_id,
             raw_origin_is_forwarded=raw_origin_is_forwarded,
+            user_message_id=msg_id,
         )
 
     return None
@@ -643,10 +656,12 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Schedule not found or not owned by you.")
         return ConversationHandler.END
 
+    channel_db_id = int(schedule["channel_id"])
+
     if not used_selected:
         await db.set_user_context(
             user_id=user_id,
-            selected_channel_id=int(schedule["channel_id"]),
+            selected_channel_id=channel_db_id,
             selected_schedule_id=schedule_id,
         )
 
@@ -657,6 +672,7 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if pending_count > 0:
             _state_clear(context)
             context.user_data["bulk_schedule_id"] = schedule_id
+            context.user_data["bulk_channel_db_id"] = channel_db_id
             await update.message.reply_text(
                 f"You have {pending_count} item(s) from a previous upload.\n"
                 "Resume or start fresh?",
@@ -672,6 +688,7 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     _state_clear(context)
     context.user_data["bulk_schedule_id"] = schedule_id
+    context.user_data["bulk_channel_db_id"] = channel_db_id
 
     details = await db.get_user_context_details(user_id)
     schedule_name = str(details.get("schedule_name") or schedule.get("name") or f"Schedule {schedule_id}")
@@ -718,6 +735,9 @@ async def bulk_resume_decision(update: Update, context: ContextTypes.DEFAULT_TYP
 
         _state_clear(context)
         _load_staging_into_user_data(context, items, session)
+        schedule = await db.get_schedule(int(session["schedule_id"]))
+        if schedule:
+            context.user_data["bulk_channel_db_id"] = int(schedule["channel_id"])
         posts = _get_posts(context)
         try:
             await query.edit_message_text(
@@ -827,6 +847,164 @@ async def bulk_set_single_caption(update: Update, context: ContextTypes.DEFAULT_
     return COLLECTING_MEDIA
 
 
+def _get_fingerprint_data(context: ContextTypes.DEFAULT_TYPE) -> list[dict[str, Any]]:
+    """Return the list of fingerprint dicts accumulated during the bulk session."""
+    data = context.user_data.get("bulk_fingerprint_data")
+    if isinstance(data, list):
+        return data
+    data = []
+    context.user_data["bulk_fingerprint_data"] = data
+    return data
+
+
+async def _check_and_warn_duplicate(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    item: _CollectedItem,
+    channel_db_id: int,
+) -> None:
+    """Run two-layer duplicate check and send a warning with action buttons if matched."""
+    user_id = update.effective_user.id if update.effective_user else 0
+    if not await db.get_channel_duplicate_detection(channel_db_id):
+        _get_fingerprint_data(context).append({
+            "file_unique_id": item.file_unique_id,
+            "dhash": None,
+            "file_id": item.file_id,
+            "media_type": item.media_type,
+        })
+        return
+    if not await db.get_user_duplicate_alerts(user_id):
+        _get_fingerprint_data(context).append({
+            "file_unique_id": item.file_unique_id,
+            "dhash": None,
+            "file_id": item.file_id,
+            "media_type": item.media_type,
+        })
+        return
+
+    match_info: dict[str, Any] | None = None
+
+    # Layer 1: exact file_unique_id match (all media types, zero cost)
+    existing = await db.find_fingerprint_by_file_unique_id(channel_db_id, item.file_unique_id)
+    if existing:
+        match_info = existing
+
+    # Layer 2: perceptual dHash match (photos only, requires download of thumbnail)
+    if match_info is None and item.media_type == "photo" and update.message and update.message.photo:
+        try:
+            smallest_file_id = update.message.photo[0].file_id
+            dhash_val = await compute_dhash(context.bot, smallest_file_id)
+
+            fp_data = _get_fingerprint_data(context)
+            fp_data.append({
+                "file_unique_id": item.file_unique_id,
+                "dhash": str(dhash_val),
+                "file_id": item.file_id,
+                "media_type": item.media_type,
+            })
+
+            existing_hashes = await db.get_channel_dhashes(channel_db_id)
+            match_id = find_similar(dhash_val, existing_hashes)
+            if match_id is not None:
+                match_info = await db.get_fingerprint(match_id)
+        except Exception:
+            logger.warning("dHash computation failed for file_id=%s", item.file_id, exc_info=True)
+    else:
+        fp_data = _get_fingerprint_data(context)
+        fp_data.append({
+            "file_unique_id": item.file_unique_id,
+            "dhash": None,
+            "file_id": item.file_id,
+            "media_type": item.media_type,
+        })
+
+    if match_info is None:
+        return
+
+    posted_at = match_info.get("posted_at")
+    date_str = str(posted_at)[:10] if posted_at else "an earlier upload"
+
+    dup_seq = context.user_data.get("bulk_dup_seq", 0)
+    context.user_data["bulk_dup_seq"] = dup_seq + 1
+    dup_map: dict[int, str] = context.user_data.setdefault("bulk_dup_map", {})
+    dup_map[dup_seq] = item.file_id
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("Remove from upload", callback_data=f"dup:rm:{dup_seq}"),
+            InlineKeyboardButton("Keep", callback_data=f"dup:keep:{dup_seq}"),
+        ]
+    ])
+    if update.message:
+        await update.message.reply_text(
+            f"This looks similar to a post from {date_str}.",
+            reply_markup=keyboard,
+            do_quote=True,
+        )
+
+
+async def bulk_duplicate_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle remove/keep decisions for duplicate warnings."""
+    query = update.callback_query
+    if query is None:
+        return
+
+    await query.answer()
+    data = query.data or ""
+
+    if data.startswith("dup:keep:"):
+        try:
+            await query.edit_message_text("Kept.")
+        except Exception:
+            pass
+        return
+
+    if data.startswith("dup:rm:"):
+        try:
+            seq = int(data.split(":")[2])
+        except (IndexError, ValueError):
+            return
+
+        dup_map: dict[int, str] = context.user_data.get("bulk_dup_map", {})
+        file_id = dup_map.pop(seq, None)
+        if file_id is None:
+            try:
+                await query.edit_message_text("Already handled.")
+            except Exception:
+                pass
+            return
+
+        user_id = update.effective_user.id if update.effective_user else 0
+
+        # Remove from in-memory posts
+        posts = _get_posts(context)
+        context.user_data["bulk_posts"] = [p for p in posts if p.get("file_id") != file_id]
+
+        # Remove from media groups
+        groups = _get_media_groups(context)
+        for gid, items in list(groups.items()):
+            groups[gid] = [i for i in items if i.file_id != file_id]
+            if not groups[gid]:
+                del groups[gid]
+                _get_media_group_indexes(context).pop(gid, None)
+
+        # Remove from fingerprint tracking
+        fp_data = _get_fingerprint_data(context)
+        context.user_data["bulk_fingerprint_data"] = [
+            fp for fp in fp_data if fp.get("file_id") != file_id
+        ]
+
+        # Remove from staging
+        if user_id:
+            await db.remove_staging_items_by_file_id(user_id, file_id)
+
+        remaining = len(_get_posts(context))
+        try:
+            await query.edit_message_text(f"Removed from upload. ({remaining} post(s) remaining)")
+        except Exception:
+            pass
+
+
 async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Collect media messages into an in-memory list until /done."""
     await ensure_user_record(update, context)
@@ -886,6 +1064,10 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
         await _persist_item_to_staging(update.effective_user.id, item, media_group_id=group_id)
 
+        channel_db_id = context.user_data.get("bulk_channel_db_id")
+        if channel_db_id:
+            await _check_and_warn_duplicate(update, context, item, int(channel_db_id))
+
         await update.message.reply_text(
             f"Added media group item. Total collected posts: {len(posts)}.\n"
             "Send more, or /done to finish."
@@ -910,6 +1092,10 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     )
 
     await _persist_item_to_staging(update.effective_user.id, item)
+
+    channel_db_id = context.user_data.get("bulk_channel_db_id")
+    if channel_db_id:
+        await _check_and_warn_duplicate(update, context, item, int(channel_db_id))
 
     await update.message.reply_text(
         f"Added {item.media_type}. Total collected posts: {len(posts)}.\n"
@@ -989,6 +1175,7 @@ async def bulk_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                     "count": len(items),
                     "first_caption": next((i.caption for i in items if i.caption), None),
                     "origin_link": _origin_link(first_item.raw_origin_chat_id, first_item.raw_origin_message_id),
+                    "reply_to_message_id": first_item.user_message_id,
                 })
             else:
                 # No placeholder recorded — flush as album silently.
@@ -1014,7 +1201,13 @@ async def bulk_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             first_caption=first.get("first_caption"),
             origin_link=first.get("origin_link"),
         )
-        await update.message.reply_text(text, reply_markup=keyboard)
+        reply_to = first.get("reply_to_message_id")
+        await context.bot.send_message(
+            chat_id=update.message.chat_id,
+            text=text,
+            reply_markup=keyboard,
+            reply_to_message_id=reply_to,
+        )
         return DECIDING_SPLITS
 
     return await _show_confirmation_message(update, context)
@@ -1049,7 +1242,20 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     posts = _get_posts(context)
-    inserted = await db.add_queued_posts_bulk(schedule_id, posts)
+    inserted, post_ids = await db.add_queued_posts_bulk(schedule_id, posts)
+
+    # Persist accumulated fingerprints, linking to the newly created queued posts.
+    channel_db_id = context.user_data.get("bulk_channel_db_id")
+    fp_data = _get_fingerprint_data(context)
+    if fp_data and channel_db_id:
+        file_id_to_post_id: dict[str, int] = {}
+        for post_dict, pid in zip(posts, post_ids):
+            fid = post_dict.get("file_id")
+            if fid:
+                file_id_to_post_id[fid] = pid
+        for fp in fp_data:
+            fp["queued_post_id"] = file_id_to_post_id.get(fp.get("file_id", ""))
+        await db.add_fingerprints_bulk(int(channel_db_id), fp_data)
 
     # If it was empty_paused, it is no longer empty; keep it paused.
     if schedule.get("state") == "empty_paused":
@@ -1168,6 +1374,7 @@ bulk_upload_conversation_handler = ConversationHandler(
                 filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
                 bulk_collect_media,
             ),
+            CallbackQueryHandler(bulk_duplicate_decision, pattern=r"^dup:"),
             CommandHandler("done", bulk_done),
             CommandHandler("cancel", bulk_cancel),
         ],
@@ -1177,6 +1384,7 @@ bulk_upload_conversation_handler = ConversationHandler(
                 filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
                 bulk_collect_media,
             ),
+            CallbackQueryHandler(bulk_duplicate_decision, pattern=r"^dup:"),
         ],
         DECIDING_SPLITS: [
             CallbackQueryHandler(bulk_split_decision, pattern=r"^sp:"),

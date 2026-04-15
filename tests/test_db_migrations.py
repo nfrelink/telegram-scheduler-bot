@@ -46,3 +46,82 @@ async def test_init_database_migrates_legacy_users_table_without_data_loss(db_en
         assert row["username"] == "u"
         assert row["timezone"] is None
 
+
+@pytest.mark.asyncio
+async def test_init_database_creates_media_fingerprints_and_duplicate_columns(db_env) -> None:
+    """Ensure the media_fingerprints table and duplicate detection columns exist after init."""
+    from database import init_database
+
+    await init_database()
+
+    async with aiosqlite.connect(db_env) as conn:
+        conn.row_factory = aiosqlite.Row
+
+        # media_fingerprints table exists
+        cur = await conn.execute("PRAGMA table_info(media_fingerprints)")
+        fp_cols = {r[1] for r in await cur.fetchall()}
+        for expected in ("id", "channel_id", "file_unique_id", "dhash", "file_id", "media_type",
+                         "queued_post_id", "posted_at", "created_at"):
+            assert expected in fp_cols, f"Missing column: {expected}"
+
+        # channels.duplicate_detection_enabled
+        cur = await conn.execute("PRAGMA table_info(channels)")
+        ch_cols = {r[1] for r in await cur.fetchall()}
+        assert "duplicate_detection_enabled" in ch_cols
+
+        # users.duplicate_alerts_enabled
+        cur = await conn.execute("PRAGMA table_info(users)")
+        u_cols = {r[1] for r in await cur.fetchall()}
+        assert "duplicate_alerts_enabled" in u_cols
+
+
+@pytest.mark.asyncio
+async def test_migration_adds_duplicate_columns_to_existing_schema(db_env) -> None:
+    """Simulate a DB with existing tables but missing duplicate detection columns."""
+    async with aiosqlite.connect(db_env) as conn:
+        await conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS schema_migrations (
+                id TEXT PRIMARY KEY,
+                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                timezone TEXT,
+                is_admin BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_active_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                channel_id TEXT NOT NULL UNIQUE,
+                channel_name TEXT NOT NULL,
+                verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE
+            );
+            """
+        )
+        await conn.execute("INSERT INTO users (id, username) VALUES (1, 'test')")
+        await conn.execute(
+            "INSERT INTO channels (user_id, channel_id, channel_name) VALUES (1, '-100', 'ch')"
+        )
+        await conn.commit()
+
+    from database import init_database
+
+    await init_database()
+
+    async with aiosqlite.connect(db_env) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute("PRAGMA table_info(channels)")
+        ch_cols = {r[1] for r in await cur.fetchall()}
+        assert "duplicate_detection_enabled" in ch_cols
+
+        cur = await conn.execute("PRAGMA table_info(users)")
+        u_cols = {r[1] for r in await cur.fetchall()}
+        assert "duplicate_alerts_enabled" in u_cols
+

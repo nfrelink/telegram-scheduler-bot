@@ -23,22 +23,24 @@ async def test_add_queued_posts_bulk_appends_and_compacts_positions(initialized_
     )
     schedule_id = int(schedule["id"])
 
-    inserted1 = await db.add_queued_posts_bulk(
+    count1, ids1 = await db.add_queued_posts_bulk(
         schedule_id,
         [
             {"media_type": "photo", "file_id": "a", "caption": "c1"},
             {"media_type": "photo", "file_id": "b", "caption": "c2"},
         ],
     )
-    assert inserted1 == 2
+    assert count1 == 2
+    assert len(ids1) == 2
 
-    inserted2 = await db.add_queued_posts_bulk(
+    count2, ids2 = await db.add_queued_posts_bulk(
         schedule_id,
         [
             {"media_type": "video", "file_id": "c", "caption": None},
         ],
     )
-    assert inserted2 == 1
+    assert count2 == 1
+    assert len(ids2) == 1
 
     posts = await db.get_queued_posts(schedule_id, limit=10)
     assert [p["file_id"] for p in posts] == ["a", "b", "c"]
@@ -276,6 +278,105 @@ async def test_bulk_staging_items_lifecycle(initialized_db) -> None:
 
     await db.clear_staging(user_id)
     assert await db.get_staging_count(user_id) == 0
+
+
+# --- Media fingerprints ---
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_insert_and_query_by_file_unique_id(initialized_db) -> None:
+    user_id = 700
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    channel = await db.create_channel(user_id=user_id, telegram_channel_id="-7001", channel_name="FP Channel")
+    ch_id = int(channel["id"])
+
+    ids = await db.add_fingerprints_bulk(ch_id, [
+        {"file_unique_id": "uniq1", "dhash": "12345", "file_id": "fid1", "media_type": "photo", "queued_post_id": None},
+        {"file_unique_id": "uniq2", "dhash": None, "file_id": "fid2", "media_type": "video", "queued_post_id": None},
+    ])
+    assert len(ids) == 2
+
+    match = await db.find_fingerprint_by_file_unique_id(ch_id, "uniq1")
+    assert match is not None
+    assert match["file_unique_id"] == "uniq1"
+    assert match["dhash"] == "12345"
+
+    no_match = await db.find_fingerprint_by_file_unique_id(ch_id, "nonexistent")
+    assert no_match is None
+
+
+@pytest.mark.asyncio
+async def test_get_channel_dhashes(initialized_db) -> None:
+    user_id = 701
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    channel = await db.create_channel(user_id=user_id, telegram_channel_id="-7002", channel_name="Hash Channel")
+    ch_id = int(channel["id"])
+
+    await db.add_fingerprints_bulk(ch_id, [
+        {"file_unique_id": "u1", "dhash": "100", "file_id": "f1", "media_type": "photo", "queued_post_id": None},
+        {"file_unique_id": "u2", "dhash": None, "file_id": "f2", "media_type": "video", "queued_post_id": None},
+        {"file_unique_id": "u3", "dhash": "200", "file_id": "f3", "media_type": "photo", "queued_post_id": None},
+    ])
+
+    hashes = await db.get_channel_dhashes(ch_id)
+    assert len(hashes) == 2
+    dhash_values = {h for _, h in hashes}
+    assert dhash_values == {100, 200}
+
+
+@pytest.mark.asyncio
+async def test_mark_fingerprint_posted_and_delete_unposted(initialized_db) -> None:
+    user_id = 702
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    channel = await db.create_channel(user_id=user_id, telegram_channel_id="-7003", channel_name="Post Channel")
+    schedule = await db.create_schedule(
+        channel_db_id=int(channel["id"]), name="S", pattern={"type": "interval", "hours": 1},
+    )
+    ch_id = int(channel["id"])
+    count, post_ids = await db.add_queued_posts_bulk(int(schedule["id"]), [
+        {"media_type": "photo", "file_id": "pf1"},
+        {"media_type": "photo", "file_id": "pf2"},
+    ])
+
+    await db.add_fingerprints_bulk(ch_id, [
+        {"file_unique_id": "pu1", "dhash": "999", "file_id": "pf1", "media_type": "photo", "queued_post_id": post_ids[0]},
+        {"file_unique_id": "pu2", "dhash": "888", "file_id": "pf2", "media_type": "photo", "queued_post_id": post_ids[1]},
+    ])
+
+    # Mark first as posted
+    await db.mark_fingerprint_posted(post_ids[0])
+    fp1 = await db.find_fingerprint_by_file_unique_id(ch_id, "pu1")
+    assert fp1 is not None
+    assert fp1["posted_at"] is not None
+
+    # Delete unposted fingerprints for second post — should be removed
+    await db.delete_unposted_fingerprints(post_ids[1])
+    fp2 = await db.find_fingerprint_by_file_unique_id(ch_id, "pu2")
+    assert fp2 is None
+
+    # First fingerprint should still exist (it was posted)
+    fp1_check = await db.find_fingerprint_by_file_unique_id(ch_id, "pu1")
+    assert fp1_check is not None
+
+
+@pytest.mark.asyncio
+async def test_duplicate_detection_settings_toggle(initialized_db) -> None:
+    user_id = 703
+    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    channel = await db.create_channel(user_id=user_id, telegram_channel_id="-7004", channel_name="Settings Channel")
+    ch_id = int(channel["id"])
+
+    assert await db.get_channel_duplicate_detection(ch_id) is False
+    await db.set_channel_duplicate_detection(ch_id, enabled=True)
+    assert await db.get_channel_duplicate_detection(ch_id) is True
+    await db.set_channel_duplicate_detection(ch_id, enabled=False)
+    assert await db.get_channel_duplicate_detection(ch_id) is False
+
+    assert await db.get_user_duplicate_alerts(user_id) is True
+    await db.set_user_duplicate_alerts(user_id, enabled=False)
+    assert await db.get_user_duplicate_alerts(user_id) is False
+    await db.set_user_duplicate_alerts(user_id, enabled=True)
+    assert await db.get_user_duplicate_alerts(user_id) is True
 
 
 @pytest.mark.asyncio

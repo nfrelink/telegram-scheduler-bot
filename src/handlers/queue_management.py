@@ -477,6 +477,7 @@ async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_caption("Post not found or not owned by you.")
             return
 
+        await db.delete_unposted_fingerprints(post_id)
         await db.delete_queued_post(post_id, user_id=user_id)
 
         # Stay at the same offset; _build_queue_page clamps it to the new total.
@@ -676,6 +677,7 @@ async def delete_post_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Post not found or not owned by you.")
         return
 
+    await db.delete_unposted_fingerprints(post_id)
     await db.delete_queued_post(post_id, user_id=update.effective_user.id)
     text, entities = render([Segment("Post "), Segment(str(post_id), code=True), Segment(" deleted.")])
     await update.message.reply_text(text, entities=entities)

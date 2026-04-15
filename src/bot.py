@@ -13,6 +13,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Mess
 from handlers.admin import broadcast_command, debug_command, stats_command
 from handlers.channel_management import channels_conversation_handler
 from handlers.bulk_upload import bulk_upload_conversation_handler
+from handlers.duplicate_detection import duplicates_conversation_handler
 from handlers.forwarding import forward_conversation_handler
 from handlers.queue_management import (
     delete_post_command,
@@ -41,6 +42,7 @@ USER_COMMANDS: list[BotCommand] = [
     BotCommand("schedules", "Create, edit, and manage schedules"),
     BotCommand("forward", "Manage native-forwarding allowlist"),
     BotCommand("bulk", "Start queuing posts for bulk upload"),
+    BotCommand("duplicates", "Manage duplicate detection settings"),
     BotCommand("cancel", "Cancel current operation"),
 ]
 
@@ -186,6 +188,9 @@ def create_application() -> Application:
 
     # Bulk upload (Phase 4)
     application.add_handler(bulk_upload_conversation_handler)
+
+    # Duplicate detection settings (/duplicates)
+    application.add_handler(duplicates_conversation_handler)
 
     # Schedule management (/schedules)
     application.add_handler(schedules_conversation_handler)

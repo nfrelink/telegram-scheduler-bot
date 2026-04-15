@@ -38,6 +38,7 @@ from telegram.ext import ConversationHandler
 def _make_item(
     media_type: str = "photo",
     file_id: str = "fid_1",
+    file_unique_id: str = "uniq_1",
     caption: str | None = None,
     caption_entities: list[dict[str, Any]] | None = None,
     forward_from_chat_id: int | None = None,
@@ -51,6 +52,7 @@ def _make_item(
     return _CollectedItem(
         media_type=media_type,
         file_id=file_id,
+        file_unique_id=file_unique_id,
         caption=caption,
         caption_entities=caption_entities,
         forward_from_chat_id=forward_from_chat_id,
@@ -98,6 +100,7 @@ def _mock_update(
     if photo:
         photo_obj = MagicMock()
         photo_obj.file_id = "photo_fid"
+        photo_obj.file_unique_id = "photo_uniq"
         message.photo = [photo_obj]
     else:
         message.photo = None
@@ -105,6 +108,7 @@ def _mock_update(
     if video:
         video_obj = MagicMock()
         video_obj.file_id = "video_fid"
+        video_obj.file_unique_id = "video_uniq"
         message.video = video_obj
     else:
         message.video = None
@@ -112,6 +116,7 @@ def _mock_update(
     if document:
         doc_obj = MagicMock()
         doc_obj.file_id = "doc_fid"
+        doc_obj.file_unique_id = "doc_uniq"
         message.document = doc_obj
     else:
         message.document = None
