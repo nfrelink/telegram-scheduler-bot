@@ -13,13 +13,13 @@ import sys
 import warnings
 from typing import Final
 
+warnings.filterwarnings("ignore", message=r".*per_message=False.*", category=UserWarning)
+
 from dotenv import load_dotenv
 
 from bot import create_application, register_commands
 from database import init_database
 from scheduler import start_scheduler
-
-warnings.filterwarnings("ignore", message=r".*per_message=False.*", category=UserWarning)
 
 logger = logging.getLogger(__name__)
 
