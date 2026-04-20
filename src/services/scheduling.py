@@ -19,8 +19,37 @@ from typing import Any
 
 from database import queries as db
 from scheduler.timing import calculate_next_run
+from utils.tz import InvalidTimezoneError, is_valid_timezone, suggest_timezones
 
 logger = logging.getLogger(__name__)
+
+# Re-export so handlers can `except scheduling.InvalidTimezoneError` without
+# depending on utils.tz directly.
+__all__ = [
+    "InvalidTimezoneError",
+    "create",
+    "delete",
+    "mark_empty",
+    "next_planned_for",
+    "pause",
+    "persist_next_run",
+    "recompute_next_run",
+    "resume",
+    "update_name",
+    "update_pattern",
+    "update_timezone",
+]
+
+
+def _validate_timezone(name: str) -> None:
+    """Raise InvalidTimezoneError if `name` is not a recognised IANA zone.
+
+    Central gate for every write that sets `schedules.timezone`. Attaches
+    close-match suggestions so the handler can forward the message to the
+    user verbatim.
+    """
+    if not is_valid_timezone(name):
+        raise InvalidTimezoneError(name, suggestions=suggest_timezones(name))
 
 
 # States in which next_planned_run_at carries a meaningful value. Any other
@@ -99,7 +128,12 @@ async def create(
     state: str = "paused",
 ) -> dict[str, Any]:
     """Create a schedule. Defaults to paused so NPR stays NULL until the user
-    explicitly resumes (which triggers the first NPR computation)."""
+    explicitly resumes (which triggers the first NPR computation).
+
+    Raises `InvalidTimezoneError` if `timezone_name` is not a recognised
+    IANA name; the exception carries close-match suggestions.
+    """
+    _validate_timezone(timezone_name)
     return await db.create_schedule(
         channel_db_id=channel_db_id,
         name=name,
@@ -129,7 +163,11 @@ async def update_timezone(
 
     Timezone changes can move daily/weekly slots; recompute pins NPR to the
     next slot under the new wall-clock target.
+
+    Raises `InvalidTimezoneError` if `timezone_name` is not a recognised
+    IANA name; the exception carries close-match suggestions.
     """
+    _validate_timezone(timezone_name)
     await db.update_schedule_timezone(
         schedule_id, timezone_name=timezone_name, user_id=user_id
     )

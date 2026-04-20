@@ -10,7 +10,25 @@ from telegram.ext import ContextTypes
 
 from database import queries as db
 from handlers.common import ensure_user_record
-from utils.tz import default_timezone_name, is_valid_timezone
+from utils.tz import default_timezone_name, is_valid_timezone, suggest_timezones
+
+
+def _unknown_timezone_message(raw: str, *, include_guided_hint: bool = True) -> str:
+    """Build the user-facing 'unknown timezone' reply.
+
+    Uses `suggest_timezones` to nudge the user toward a likely typo
+    correction when one exists. Caller decides whether to append the
+    `/timezone` guided-selection hint (keyboard-originated errors
+    already pop the keyboard back open, so the hint is redundant there).
+    """
+    suggestions = suggest_timezones(raw)
+    head = f"Unknown timezone: {raw!r}"
+    if suggestions:
+        head += f"\nDid you mean: {', '.join(suggestions)}?"
+    tail = "\nUse an IANA timezone name like Europe/Amsterdam or UTC."
+    if include_guided_hint:
+        tail += "\nOr use /timezone for guided selection."
+    return head + tail
 
 logger = logging.getLogger(__name__)
 
@@ -180,11 +198,7 @@ async def settimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not is_valid_timezone(raw):
-        await update.message.reply_text(
-            f"Unknown timezone: {raw}\n"
-            f"Use an IANA timezone name like Europe/Amsterdam or UTC.\n"
-            f"Or use /timezone for guided selection."
-        )
+        await update.message.reply_text(_unknown_timezone_message(raw))
         return
 
     await db.set_user_timezone(update.effective_user.id, raw)
@@ -243,7 +257,8 @@ async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not is_valid_timezone(iana_name):
             try:
                 await query.edit_message_text(
-                    f"Invalid timezone: {iana_name}\nPlease select again.",
+                    _unknown_timezone_message(iana_name, include_guided_hint=False)
+                    + "\n\nPlease select again.",
                     reply_markup=_regions_keyboard(),
                 )
             except Exception:

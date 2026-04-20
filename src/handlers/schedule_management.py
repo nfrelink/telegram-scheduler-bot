@@ -24,7 +24,12 @@ from database import queries as db
 from handlers.common import ensure_user_record, parse_int
 from scheduler.timing import WEEKDAY_NAME_TO_INT, parse_time_string, validate_schedule_pattern
 from services import scheduling
-from utils.tz import default_timezone_name, is_valid_timezone
+from utils.tz import (
+    InvalidTimezoneError,
+    default_timezone_name,
+    is_valid_timezone,
+    suggest_timezones,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -417,10 +422,12 @@ async def schedules_tz_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return SM_WAIT_TZ_INPUT
 
     if not is_valid_timezone(raw):
-        await msg.reply_text(
-            f"Unknown timezone: {raw!r}\n"
-            "Use an IANA timezone name like Europe/Amsterdam, UTC, America/New_York."
-        )
+        suggestions = suggest_timezones(raw)
+        reply = f"Unknown timezone: {raw!r}"
+        if suggestions:
+            reply += f"\nDid you mean: {', '.join(suggestions)}?"
+        reply += "\nUse an IANA timezone name like Europe/Amsterdam, UTC, America/New_York."
+        await msg.reply_text(reply)
         return SM_WAIT_TZ_INPUT
 
     s_id = context.user_data.get("sm_settp_schedule_id")
@@ -433,9 +440,16 @@ async def schedules_tz_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await msg.reply_text("Schedule not found.")
         return ConversationHandler.END
 
-    await scheduling.update_timezone(
-        int(s_id), timezone_name=raw, user_id=update.effective_user.id
-    )
+    try:
+        await scheduling.update_timezone(
+            int(s_id), timezone_name=raw, user_id=update.effective_user.id
+        )
+    except InvalidTimezoneError as e:
+        # Defence-in-depth: handler already validated above, but the service
+        # is the single source of truth for what a valid timezone looks like.
+        # Should the two ever disagree, prefer the service's verdict.
+        await msg.reply_text(str(e))
+        return SM_WAIT_TZ_INPUT
     logger.info("User %s set timezone of schedule %s to %s", update.effective_user.id, s_id, raw)
     await msg.reply_text(f"Timezone for '{schedule['name']}' set to {raw}.")
     context.user_data.pop("sm_settp_schedule_id", None)
@@ -568,13 +582,27 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
     is_first_schedule = not prior_ctx.get("selected_schedule_id")
     name = str(context.user_data.get("ns_name"))
     tz_name = str(context.user_data.get("ns_timezone") or default_timezone_name())
-    schedule = await scheduling.create(
-        channel_db_id=channel_db_id,
-        name=name,
-        pattern=pattern,
-        timezone_name=tz_name,
-        state="paused",
-    )
+    try:
+        schedule = await scheduling.create(
+            channel_db_id=channel_db_id,
+            name=name,
+            pattern=pattern,
+            timezone_name=tz_name,
+            state="paused",
+        )
+    except InvalidTimezoneError as e:
+        # `tz_name` here comes from the in-memory wizard state, seeded from
+        # the user's stored preference (already validated at write time).
+        # Reaching this branch means that invariant has been violated (legacy
+        # or manually-edited row). The wizard has no dedicated TZ-picker
+        # step to re-enter here, so surface the service message, tell the
+        # user to fix their default first, and drop out.
+        await update.message.reply_text(
+            f"{e}\n\nYour saved default timezone is invalid. "
+            "Fix it with /timezone and run /schedules again."
+        )
+        _clear_ns_state(context)
+        return ConversationHandler.END
     await db.set_user_context(
         user_id=user_id,
         selected_channel_id=channel_db_id,
@@ -799,11 +827,19 @@ async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFA
     if raw_tz.lower() in {"default", "reset", "clear"}:
         raw_tz = await _effective_user_timezone_name(user_id)
     if not is_valid_timezone(raw_tz):
-        await update.message.reply_text(f"Unknown timezone: {raw_tz!r}")
+        suggestions = suggest_timezones(raw_tz)
+        reply = f"Unknown timezone: {raw_tz!r}"
+        if suggestions:
+            reply += f"\nDid you mean: {', '.join(suggestions)}?"
+        await update.message.reply_text(reply)
         return
-    await scheduling.update_timezone(
-        schedule_id, timezone_name=raw_tz, user_id=user_id
-    )
+    try:
+        await scheduling.update_timezone(
+            schedule_id, timezone_name=raw_tz, user_id=user_id
+        )
+    except InvalidTimezoneError as e:
+        await update.message.reply_text(str(e))
+        return
     await update.message.reply_text(f"Schedule {schedule_id} timezone set to {raw_tz}.")
 
 

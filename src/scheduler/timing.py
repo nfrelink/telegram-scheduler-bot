@@ -25,6 +25,15 @@ WEEKDAY_NAME_TO_INT: dict[str, int] = {
 
 
 def _get_timezone(tz_name: str | None) -> tzinfo:
+    """Resolve a stored timezone name to a tzinfo, with UTC fallback.
+
+    Write-time validation in `services.scheduling` should prevent
+    invalid names from ever reaching storage. Reaching the error paths
+    here means a data invariant was bypassed (legacy row, direct SQL,
+    missing tzdata in the runtime image); logged at ERROR for that
+    reason, but UTC is still returned so a single corrupt row can't
+    crash the scheduler tick for an otherwise-healthy schedule.
+    """
     if not tz_name:
         tz_name = os.getenv("DEFAULT_TIMEZONE", "UTC")
 
@@ -35,13 +44,18 @@ def _get_timezone(tz_name: str | None) -> tzinfo:
     try:
         return ZoneInfo(tz_name)
     except ZoneInfoNotFoundError:
-        logger.warning(
-            "Timezone %r not found (missing tzdata?); falling back to UTC",
+        logger.error(
+            "Timezone %r not found (missing tzdata or write-time "
+            "validation bypassed); falling back to UTC",
             tz_name,
         )
         return timezone.utc
     except Exception:
-        logger.warning("Unknown timezone %r; falling back to UTC", tz_name)
+        logger.error(
+            "Unknown timezone %r (write-time validation bypassed); "
+            "falling back to UTC",
+            tz_name,
+        )
         return timezone.utc
 
 

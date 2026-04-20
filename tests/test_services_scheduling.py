@@ -251,3 +251,94 @@ async def test_delete_removes_schedule(initialized_db) -> None:
     sid = await _mk_schedule(user_id, "407", pattern={"type": "interval", "minutes": 5})
     await scheduling.delete(sid, user_id=user_id)
     assert await db.get_schedule(sid) is None
+
+
+# ---------------------------------------------------------------------------
+# Timezone validation at service boundary
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_rejects_invalid_timezone(initialized_db) -> None:
+    """Handlers validate first, but the service is the source of truth. A
+    handler-bypassing caller must not be able to write an invalid tz."""
+    user_id = 7500
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    ch = await db.create_channel(
+        user_id=user_id, telegram_channel_id="-7500", channel_name="C"
+    )
+
+    with pytest.raises(scheduling.InvalidTimezoneError) as excinfo:
+        await scheduling.create(
+            channel_db_id=int(ch["id"]),
+            name="S",
+            pattern={"type": "interval", "minutes": 5},
+            timezone_name="Foo/Bar",
+        )
+    assert "Foo/Bar" in str(excinfo.value)
+
+    # Nothing was persisted.
+    async with get_db() as conn:
+        cursor = await conn.execute(
+            "SELECT COUNT(*) AS n FROM schedules WHERE channel_id = ?",
+            (int(ch["id"]),),
+        )
+        row = await cursor.fetchone()
+        assert int(row["n"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_create_accepts_canonical_utc(initialized_db) -> None:
+    """UTC must survive validation even on systems without tzdata; this
+    pins the `utils.tz.is_valid_timezone` UTC short-circuit at the service
+    boundary."""
+    user_id = 7501
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    ch = await db.create_channel(
+        user_id=user_id, telegram_channel_id="-7501", channel_name="C"
+    )
+    s = await scheduling.create(
+        channel_db_id=int(ch["id"]),
+        name="S",
+        pattern={"type": "interval", "minutes": 5},
+        timezone_name="UTC",
+    )
+    assert s["timezone"] == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_update_timezone_rejects_invalid_timezone(initialized_db) -> None:
+    user_id = 7502
+    sid = await _mk_schedule(
+        user_id, "502", pattern={"type": "daily", "times": ["12:00"]}
+    )
+
+    with pytest.raises(scheduling.InvalidTimezoneError) as excinfo:
+        await scheduling.update_timezone(
+            sid, timezone_name="Not/ARealZone", user_id=user_id
+        )
+    assert "Not/ARealZone" in str(excinfo.value)
+
+    # The stored tz must be unchanged on rejection.
+    sched = await db.get_schedule(sid)
+    assert sched["timezone"] == "UTC"
+
+
+@pytest.mark.asyncio
+async def test_update_timezone_exception_carries_suggestions(initialized_db) -> None:
+    """A close typo produces an actionable error the handler can forward
+    verbatim."""
+    user_id = 7503
+    sid = await _mk_schedule(
+        user_id, "503", pattern={"type": "daily", "times": ["12:00"]}
+    )
+
+    with pytest.raises(scheduling.InvalidTimezoneError) as excinfo:
+        await scheduling.update_timezone(
+            sid, timezone_name="Europe/Amsterdamm", user_id=user_id
+        )
+    assert "Europe/Amsterdam" in excinfo.value.suggestions
+    assert "Did you mean" in str(excinfo.value)
