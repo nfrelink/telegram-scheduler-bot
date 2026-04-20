@@ -1236,19 +1236,24 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         channel_db_id=int(channel_db_id) if channel_db_id else None,
     )
 
-    # If it was empty_paused, it is no longer empty; keep it paused.
-    if schedule.get("state") == "empty_paused":
-        await scheduling.pause(schedule_id, user_id=update.effective_user.id)
+    # 'empty_paused' is system-set when the queue ran dry; with new posts
+    # its only reason is gone, so resume. 'paused' is a user choice — leave it.
+    auto_resumed = schedule.get("state") == "empty_paused"
+    if auto_resumed:
+        await scheduling.resume(schedule_id, user_id=update.effective_user.id)
 
     await _clear_staging(update.effective_user.id)
     _state_clear(context)
     details = await db.get_user_context_details(update.effective_user.id)
     sched_name = str(schedule.get("name") or f"Schedule {schedule_id}")
-    segments = [
-        Segment(f"Queued {inserted} posts for '{sched_name}'.\n"),
-        Segment("Use /schedules to resume posting when ready.\n\n"),
-        *selection_segments(details),
-    ]
+    segments: list[Segment] = [Segment(f"Queued {inserted} posts for '{sched_name}'.\n")]
+    if auto_resumed:
+        segments.append(Segment("Schedule was empty and is now active.\n\n"))
+    elif schedule.get("state") == "paused":
+        segments.append(Segment("Use /schedules to resume posting when ready.\n\n"))
+    else:
+        segments.append(Segment("\n"))
+    segments.extend(selection_segments(details))
     text, entities = render(segments)
     await update.message.reply_text(text, entities=entities)
     logger.info("User %s queued %s posts for schedule id=%s", update.effective_user.id, inserted, schedule_id)

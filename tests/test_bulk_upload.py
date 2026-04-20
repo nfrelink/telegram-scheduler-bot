@@ -25,6 +25,7 @@ from handlers.bulk_upload import (
     _load_staging_into_user_data,
     _parse_markdownish,
     bulk_collect_media,
+    bulk_confirm,
     bulk_set_caption_mode,
     bulk_set_single_caption,
 )
@@ -697,3 +698,64 @@ class TestLoadStagingIntoUserData:
         assert ctx.user_data["bulk_caption_mode"] == "single"
         assert ctx.user_data["bulk_single_caption"] == "shared"
         assert ctx.user_data["bulk_single_caption_entities"] == [{"type": "bold", "offset": 0, "length": 6}]
+
+
+# ===========================================================================
+# bulk_confirm: post-enqueue state-transition policy
+# ===========================================================================
+
+
+class TestBulkConfirmAutoResume:
+    """Distinguishes system-paused (empty_paused) from user-paused.
+
+    Adding posts removes the only reason a schedule was empty_paused, so the
+    handler should auto-resume. User-paused schedules are an explicit choice
+    and must stay paused; active schedules are unchanged.
+    """
+
+    @staticmethod
+    def _ctx_with_posts() -> MagicMock:
+        ctx = _mock_context(
+            bulk_schedule_id=7,
+            bulk_channel_db_id=3,
+            bulk_posts=[{"media_type": "photo", "file_id": "fid_1"}],
+            bulk_fingerprint_data=[],
+        )
+        return ctx
+
+    @staticmethod
+    async def _run(ctx: MagicMock, schedule_state: str) -> tuple[AsyncMock, AsyncMock, int]:
+        update = _mock_update(text="yes")
+        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock), \
+             patch("handlers.bulk_upload._clear_staging", new_callable=AsyncMock), \
+             patch("handlers.bulk_upload.posting") as mock_posting, \
+             patch("handlers.bulk_upload.scheduling") as mock_scheduling, \
+             patch("handlers.bulk_upload.db") as mock_db:
+            mock_posting.enqueue_bulk = AsyncMock(return_value=(1, [101]))
+            mock_scheduling.resume = AsyncMock()
+            mock_scheduling.pause = AsyncMock()
+            mock_db.get_schedule_for_user = AsyncMock(
+                return_value={"id": 7, "name": "test", "state": schedule_state}
+            )
+            mock_db.get_user_context_details = AsyncMock(return_value={})
+            result = await bulk_confirm(update, ctx)
+        return mock_scheduling.resume, mock_scheduling.pause, result
+
+    @pytest.mark.asyncio
+    async def test_empty_paused_is_auto_resumed(self) -> None:
+        resume, pause, result = await self._run(self._ctx_with_posts(), "empty_paused")
+        resume.assert_awaited_once_with(7, user_id=42)
+        pause.assert_not_awaited()
+        assert result == ConversationHandler.END
+
+    @pytest.mark.asyncio
+    async def test_user_paused_is_left_untouched(self) -> None:
+        resume, pause, _ = await self._run(self._ctx_with_posts(), "paused")
+        resume.assert_not_awaited()
+        pause.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_active_is_left_untouched(self) -> None:
+        resume, pause, _ = await self._run(self._ctx_with_posts(), "active")
+        resume.assert_not_awaited()
+        pause.assert_not_awaited()
