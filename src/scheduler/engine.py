@@ -24,11 +24,15 @@ MAX_RETRIES = 3
 CATCHUP_SPACING_SECONDS = int(os.getenv("CATCHUP_SPACING_SECONDS", "30"))
 CATCHUP_MAX_RUNS_PER_SCHEDULE = int(os.getenv("CATCHUP_MAX_RUNS_PER_SCHEDULE", "5"))
 CATCHUP_MAX_ITERATIONS = 5000
-FIFO_LOOKBACK_GRACE_SECONDS = int(os.getenv("FIFO_LOOKBACK_GRACE_SECONDS", "300"))
 
 
-async def start_scheduler(bot: ExtBot) -> None:
-    """Run the scheduler loop until cancelled."""
+async def start_scheduler(bot: ExtBot) -> None:  # pragma: no cover
+    """Run the scheduler loop until cancelled.
+
+    Bootstrap glue around the (heavily covered) _process_due_schedules,
+    _get_sleep_seconds and _catch_up_missed_posts helpers; not unit-tested
+    directly because it is an unbounded asyncio loop driven by real wall-clock.
+    """
     check_interval = int(os.getenv("SCHEDULER_CHECK_INTERVAL", "60") or "60")
     check_interval = max(1, check_interval)
 
@@ -76,10 +80,26 @@ async def _get_sleep_seconds(default_seconds: int) -> float:
 
 
 async def _catch_up_missed_posts() -> None:
-    """On startup, schedule missed posts for near-future execution.
+    """On startup, schedule a small burst of missed posts for near-future execution.
 
-    This sets queued_posts.scheduled_for for the first N unscheduled queued posts per schedule.
-    The scheduler loop will then wake up in time to process these posts.
+    Behaviour, per active schedule:
+      1. Determine the cursor: prefer `next_planned_run_at`. If NULL (e.g. the
+         column was just added by migration, or the schedule was created before
+         next_planned_run_at became canonical), derive a cursor from
+         `last_run_at` or `created_at` so we have a starting point.
+      2. Walk forward via `calculate_next_run`, counting slots strictly <= now.
+         Stop at CATCHUP_MAX_RUNS_PER_SCHEDULE (default 5) — that's the cap on
+         the catch-up *burst*, not on the queue: any remaining queued posts
+         continue to drain through the regular tick at the schedule's normal
+         pattern cadence.
+      3. Assign `scheduled_for = now + i*CATCHUP_SPACING_SECONDS` to the first N
+         unscheduled queued posts (FIFO order, preserved by `position`).
+      4. Persist `next_planned_run_at = calculate_next_run(after=now)` so the
+         regular tick resumes at the next legitimate slot.
+
+    Skips the schedule entirely if there's nothing to catch up; in that case
+    we still backfill `next_planned_run_at` if it was NULL, to satisfy the tick's
+    invariant.
     """
     now = datetime.now(timezone.utc)
     schedules = await db.get_active_schedules()
@@ -89,24 +109,34 @@ async def _catch_up_missed_posts() -> None:
     for schedule in schedules:
         schedule_id = int(schedule["id"])
         try:
-            last_run_at = parse_timestamp(schedule.get("last_run_at"))
-            created_at = parse_timestamp(schedule.get("created_at"))
-            base_after = last_run_at or created_at
-            if base_after is None:
+            cursor = _catchup_cursor(schedule, now=now)
+            if cursor is None:
+                # Nothing reasonable to compute from (no NPR, no last_run_at,
+                # no created_at, no valid pattern). Leave it; the tick's
+                # defensive backfill will handle it.
                 continue
 
-            cursor = base_after
             missed = 0
-
+            # CATCHUP_MAX_ITERATIONS is a hard upper bound that protects against
+            # a pattern that could (pathologically) keep returning timestamps
+            # <= now forever. With the default CATCHUP_MAX_RUNS_PER_SCHEDULE=5
+            # the inner cap break fires first; the loop "ran to completion"
+            # branch is only exercisable by setting MAX < cap, which is not a
+            # supported configuration.
             for _ in range(CATCHUP_MAX_ITERATIONS):
-                next_run = calculate_next_run(schedule, after=cursor)
-                if next_run <= now:
-                    missed += 1
-                    cursor = next_run
-                    if missed >= CATCHUP_MAX_RUNS_PER_SCHEDULE:
-                        break
-                else:
+                if cursor > now:
                     break
+                missed += 1
+                if missed >= CATCHUP_MAX_RUNS_PER_SCHEDULE:
+                    cursor = calculate_next_run(schedule, after=cursor)
+                    break
+                cursor = calculate_next_run(schedule, after=cursor)
+
+            # Always normalise next_planned_run_at to the next slot strictly
+            # after `now`. This both backfills NULL on first migration tick
+            # and prevents the regular tick from chewing through past slots.
+            new_next_planned = calculate_next_run(schedule, after=now)
+            await db.update_schedule_next_planned_run(schedule_id, new_next_planned)
 
             if missed <= 0:
                 continue
@@ -116,24 +146,46 @@ async def _catch_up_missed_posts() -> None:
                 continue
 
             updates: list[tuple[int, datetime]] = []
-            base_time = now
             for i, post in enumerate(candidates[:missed]):
                 post_id = int(post["id"])
-                updates.append((post_id, base_time + timedelta(seconds=CATCHUP_SPACING_SECONDS * i)))
+                updates.append((post_id, now + timedelta(seconds=CATCHUP_SPACING_SECONDS * i)))
 
             await db.bulk_update_posts_scheduled_for(updates)
             total_scheduled += len(updates)
 
             logger.info(
-                "Catch-up scheduled %s posts for schedule id=%s",
+                "Catch-up scheduled %s posts for schedule id=%s; next_planned_run_at=%s",
                 len(updates),
                 schedule_id,
+                new_next_planned.isoformat(),
             )
         except Exception as e:
             logger.error("Catch-up failed for schedule id=%s: %s", schedule_id, e, exc_info=True)
 
     if total_scheduled:
         logger.info("Catch-up scheduled %s posts total", total_scheduled)
+
+
+def _catchup_cursor(schedule: dict[str, Any], *, now: datetime) -> datetime | None:
+    """Pick the timestamp to start counting missed slots from.
+
+    Prefers next_planned_run_at; falls back to deriving a value from the
+    historical last_run_at / created_at for schedules predating the column.
+    Returns None if no reasonable value can be derived.
+    """
+    npa = parse_timestamp(schedule.get("next_planned_run_at"))
+    if npa is not None:
+        return npa
+
+    base = parse_timestamp(schedule.get("last_run_at")) or parse_timestamp(
+        schedule.get("created_at")
+    )
+    if base is None:
+        return None
+    try:
+        return calculate_next_run(schedule, after=base)
+    except ValueError:
+        return None
 
 
 async def _process_due_schedules(bot: ExtBot, *, rate_limiter: RateLimiter) -> None:
@@ -203,37 +255,32 @@ async def _process_schedule(
         if scheduled_for > now:
             return
     else:
-        # Normal FIFO post: send only when the schedule pattern is due.
-        last_run_at = parse_timestamp(schedule.get("last_run_at"))
-        created_at = parse_timestamp(schedule.get("created_at"))
-        base_after = last_run_at or created_at or now
-
-        # The grace clamp prevents the regular tick from firing arbitrarily
-        # old "missed" wall-clock slots (that's _catch_up_missed_posts' job).
-        # It only applies to daily/weekly, where calculate_next_run picks the
-        # next absolute clock time after `base_after` and a stale value can
-        # pull in an in-past slot. Interval patterns use relative spacing
-        # (`base_after + delta`); clamping there would suppress legitimate
-        # posts whenever last_run_at is older than the grace window.
-        pattern_type = (schedule.get("pattern") or {}).get("type")
-        if pattern_type in ("daily", "weekly"):
-            cutoff = now - timedelta(seconds=FIFO_LOOKBACK_GRACE_SECONDS)
-            if base_after < cutoff:
-                base_after = cutoff
-
-        next_run = calculate_next_run(schedule, after=base_after)
-        if now < next_run:
+        # Normal FIFO post: gate on next_planned_run_at, the single source of
+        # truth maintained by recompute_next_run / complete_post_send / catchup.
+        npa = parse_timestamp(schedule.get("next_planned_run_at"))
+        if npa is None:
+            # Defensive backfill for an active schedule with a NULL value
+            # (e.g. created before the column existed and never caught up).
+            # We persist immediately so the next tick has a consistent value.
+            npa = calculate_next_run(schedule, after=now)
+            await db.update_schedule_next_planned_run(schedule_id, npa)
+        if now < npa:
             return
 
     await rate_limiter.wait_if_needed(telegram_channel_id)
     ok = await send_post(bot, telegram_channel_id=telegram_channel_id, post=post)
 
     if ok:
+        # Compute the next planned slot from `now`, not from the slot we just
+        # fired. For daily/weekly this picks the next clock time after the
+        # actual fire; for interval it preserves cadence relative to fires.
+        new_next_planned = calculate_next_run(schedule, after=now)
         await db.complete_post_send(
             post_id=post_id,
             schedule_id=schedule_id,
             owner_user_id=owner_user_id,
             day=now.date(),
+            next_planned_run_at=new_next_planned,
         )
         return
 

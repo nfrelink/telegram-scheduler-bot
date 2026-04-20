@@ -22,6 +22,7 @@ from telegram.ext import (
 
 from database import queries as db
 from handlers.common import ensure_user_record, parse_int
+from scheduler.state import recompute_next_run
 from scheduler.timing import WEEKDAY_NAME_TO_INT, parse_time_string, validate_schedule_pattern
 from utils.tz import default_timezone_name, is_valid_timezone
 
@@ -280,6 +281,9 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             )
             return SM_SHOWING
         await db.resume_schedule(s_id, user_id=user_id)
+        # Resume implies "start ticking from now": recompute the next planned
+        # slot so the engine doesn't fire a back-dated daily/weekly slot.
+        await recompute_next_run(s_id)
         await _refresh_list(user_id, context, query)
         return SM_SHOWING
 
@@ -433,6 +437,9 @@ async def schedules_tz_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return ConversationHandler.END
 
     await db.update_schedule_timezone(int(s_id), timezone_name=raw, user_id=update.effective_user.id)
+    # Timezone change can move daily/weekly slots; recompute so the next tick
+    # uses the new wall-clock target.
+    await recompute_next_run(int(s_id))
     logger.info("User %s set timezone of schedule %s to %s", update.effective_user.id, s_id, raw)
     await msg.reply_text(f"Timezone for '{schedule['name']}' set to {raw}.")
     context.user_data.pop("sm_settp_schedule_id", None)
@@ -736,7 +743,10 @@ async def _editschedule_finalize(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
     s_id = int(raw_id)
     await db.update_schedule_pattern(s_id, pattern, user_id=update.effective_user.id)
-    await db.update_schedule_last_run(s_id)
+    # The new pattern implies a new next-fire moment computed from `now`;
+    # recompute_next_run replaces the legacy "bump last_run_at" trick used
+    # before next_planned_run_at became canonical.
+    await recompute_next_run(s_id)
     tz_name = str(context.user_data.get("es_timezone") or default_timezone_name())
     await update.message.reply_text(
         f"Pattern updated: {_pattern_summary(pattern, tz_name=tz_name)}"
@@ -800,6 +810,7 @@ async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFA
         await update.message.reply_text(f"Unknown timezone: {raw_tz!r}")
         return
     await db.update_schedule_timezone(schedule_id, timezone_name=raw_tz, user_id=user_id)
+    await recompute_next_run(schedule_id)
     await update.message.reply_text(f"Schedule {schedule_id} timezone set to {raw_tz}.")
 
 

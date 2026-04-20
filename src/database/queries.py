@@ -456,14 +456,31 @@ async def get_active_schedules() -> list[dict[str, Any]]:
 async def _update_schedule_state_in_tx(
     db, schedule_id: int, state: str, *, user_id: int
 ) -> None:  # type: ignore[no-untyped-def]
-    """In-transaction body for update_schedule_state. Caller owns the tx."""
-    await db.execute(
-        """
-        UPDATE schedules SET state = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
-        """,
-        (state, schedule_id, user_id),
-    )
+    """In-transaction body for update_schedule_state. Caller owns the tx.
+
+    Also clears `next_planned_run_at` when the new state is not 'active'. This
+    keeps the invariant "active schedules carry a non-NULL NPR; non-active
+    schedules carry NULL" enforced atomically. Resuming (transition back to
+    active) goes through `resume_schedule` followed by `recompute_next_run`,
+    which both set NPR explicitly.
+    """
+    if state == "active":
+        await db.execute(
+            """
+            UPDATE schedules SET state = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
+            """,
+            (state, schedule_id, user_id),
+        )
+    else:
+        await db.execute(
+            """
+            UPDATE schedules
+            SET state = ?, updated_at = CURRENT_TIMESTAMP, next_planned_run_at = NULL
+            WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
+            """,
+            (state, schedule_id, user_id),
+        )
 
 
 async def update_schedule_state(schedule_id: int, state: str, *, user_id: int) -> None:
@@ -540,6 +557,32 @@ async def update_schedule_last_run(schedule_id: int) -> None:
     """Update last_run_at timestamp."""
     async with transaction() as db:
         await _update_schedule_last_run_in_tx(db, schedule_id)
+
+
+async def _update_schedule_next_planned_run_in_tx(
+    db, schedule_id: int, next_at: datetime | None
+) -> None:  # type: ignore[no-untyped-def]
+    """In-transaction body for update_schedule_next_planned_run. Caller owns the tx.
+
+    `next_at` is stored as a UTC TEXT timestamp; pass None to clear (e.g. when a
+    schedule transitions to paused/empty_paused).
+    """
+    await db.execute(
+        "UPDATE schedules SET next_planned_run_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (to_sqlite_timestamp(next_at) if next_at is not None else None, schedule_id),
+    )
+
+
+async def update_schedule_next_planned_run(
+    schedule_id: int, next_at: datetime | None
+) -> None:
+    """Persist the schedule's next planned fire time (UTC) or clear it.
+
+    Single source of truth used by the scheduler tick; written by
+    `recompute_next_run` and (atomically) by `complete_post_send`.
+    """
+    async with transaction() as db:
+        await _update_schedule_next_planned_run_in_tx(db, schedule_id, next_at)
 
 
 async def delete_schedule(schedule_id: int, *, user_id: int) -> None:
@@ -1431,17 +1474,24 @@ async def complete_post_send(
     schedule_id: int,
     owner_user_id: int,
     day: date,
+    next_planned_run_at: datetime | None,
 ) -> None:
     """Atomically apply all post-success state mutations.
 
     Combines: increment posts_sent, mark fingerprints posted, delete the queued
-    post (with FIFO position compaction), bump schedule.last_run_at.
+    post (with FIFO position compaction), bump schedule.last_run_at, and
+    advance schedule.next_planned_run_at to the freshly-computed next slot.
+
+    `next_planned_run_at` is computed by the caller (engine) immediately before
+    invocation; passing it in keeps the recompute outside the tx (cheap, pure)
+    while keeping the persisted state mutation atomic with the rest.
     """
     async with transaction() as db:
         await _increment_delivery_stats_daily_in_tx(db, day=day, posts_sent_delta=1)
         await _mark_fingerprint_posted_in_tx(db, post_id)
         await _delete_queued_post_in_tx(db, post_id, user_id=owner_user_id)
         await _update_schedule_last_run_in_tx(db, schedule_id)
+        await _update_schedule_next_planned_run_in_tx(db, schedule_id, next_planned_run_at)
 
 
 async def complete_post_retry(

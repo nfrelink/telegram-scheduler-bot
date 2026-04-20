@@ -458,9 +458,15 @@ async def test_complete_post_send_applies_all_writes(initialized_db) -> None:
     stats_before = await _today_stats()
     sched_before = await db.get_schedule(sid)
     assert sched_before["last_run_at"] is None
+    assert sched_before["next_planned_run_at"] is None
 
+    next_planned = datetime.now(timezone.utc) + timedelta(minutes=30)
     await db.complete_post_send(
-        post_id=post_ids[0], schedule_id=sid, owner_user_id=user_id, day=datetime.now(timezone.utc).date()
+        post_id=post_ids[0],
+        schedule_id=sid,
+        owner_user_id=user_id,
+        day=datetime.now(timezone.utc).date(),
+        next_planned_run_at=next_planned,
     )
 
     stats_after = await _today_stats()
@@ -475,13 +481,19 @@ async def test_complete_post_send_applies_all_writes(initialized_db) -> None:
 
     sched_after = await db.get_schedule(sid)
     assert sched_after["last_run_at"] is not None
+    # NPR was advanced atomically alongside the rest.
+    from database.time import parse_timestamp as _pt
+    assert _pt(sched_after["next_planned_run_at"]) is not None
+    # Compare at second precision (SQLite stores TEXT seconds).
+    assert _pt(sched_after["next_planned_run_at"]).replace(microsecond=0) == \
+        next_planned.replace(microsecond=0)
 
 
 @pytest.mark.asyncio
 async def test_complete_post_send_rolls_back_on_inner_failure(initialized_db, monkeypatch) -> None:
     """If any in-tx step raises, all preceding writes in the orchestrator must
-    be rolled back. We force the last step (update_schedule_last_run) to raise
-    and assert that earlier steps left no trace."""
+    be rolled back. We force the last step (update_schedule_next_planned_run)
+    to raise and assert that earlier steps left no trace."""
     user_id = 9002
     ch_id, sid = await _seed_user_channel_schedule(user_id, tg_id="-9002")
     _, post_ids = await db.add_queued_posts_bulk(
@@ -499,11 +511,17 @@ async def test_complete_post_send_rolls_back_on_inner_failure(initialized_db, mo
     async def _boom(*args, **kwargs):
         raise RuntimeError("simulated crash")
 
-    monkeypatch.setattr(db, "_update_schedule_last_run_in_tx", _boom)
+    # Force the *last* in-tx step to raise so all preceding writes (stats,
+    # mark posted, delete, last_run_at bump) must roll back.
+    monkeypatch.setattr(db, "_update_schedule_next_planned_run_in_tx", _boom)
 
     with pytest.raises(RuntimeError, match="simulated crash"):
         await db.complete_post_send(
-            post_id=post_ids[0], schedule_id=sid, owner_user_id=user_id, day=datetime.now(timezone.utc).date()
+            post_id=post_ids[0],
+            schedule_id=sid,
+            owner_user_id=user_id,
+            day=datetime.now(timezone.utc).date(),
+            next_planned_run_at=datetime.now(timezone.utc) + timedelta(minutes=30),
         )
 
     stats_after = await _today_stats()
@@ -514,6 +532,10 @@ async def test_complete_post_send_rolls_back_on_inner_failure(initialized_db, mo
 
     remaining = await db.get_queued_posts(sid, limit=10)
     assert [p["file_id"] for p in remaining] == ["y1"]  # delete rolled back
+
+    sched = await db.get_schedule(sid)
+    assert sched["last_run_at"] is None  # last_run_at bump rolled back
+    assert sched["next_planned_run_at"] is None  # NPR write itself never landed
 
 
 @pytest.mark.asyncio

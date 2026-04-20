@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS schedules (
     state TEXT DEFAULT 'active',  -- 'active', 'paused', 'empty_paused'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_run_at TIMESTAMP,
+    last_run_at TIMESTAMP,  -- Historical fire timestamp; not read by the scheduler in v2 (kept for audit/migration).
+    next_planned_run_at TIMESTAMP,  -- Single source of truth for when this schedule should next fire (UTC). NULL when paused/empty_paused.
     FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 
@@ -61,6 +62,7 @@ CREATE INDEX IF NOT EXISTS idx_schedules_channel_id ON schedules(channel_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_state ON schedules(state);
 CREATE INDEX IF NOT EXISTS idx_schedules_last_run ON schedules(last_run_at);
 CREATE INDEX IF NOT EXISTS idx_schedules_state_active ON schedules(state) WHERE state = 'active';
+CREATE INDEX IF NOT EXISTS idx_schedules_next_planned_run_at ON schedules(next_planned_run_at);
 
 CREATE TABLE IF NOT EXISTS queued_posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,14 +216,20 @@ async def _apply_migrations(db) -> None:  # type: ignore[no-untyped-def]
     )
     await db.commit()
 
-    migrations: list[tuple[str, list[tuple[str, str, str]]]] = [
+    # Each migration entry is (id, columns_to_add, extra_sql_statements).
+    # `extra_sql_statements` covers things ALTER TABLE can't, e.g. CREATE INDEX
+    # on the freshly added column. Each statement runs after columns are added,
+    # in order, and must itself be idempotent (use IF NOT EXISTS).
+    migrations: list[tuple[str, list[tuple[str, str, str]], list[str]]] = [
         (
             "20250201_add_schedules_timezone",
             [("schedules", "timezone", "TEXT DEFAULT 'UTC'")],
+            [],
         ),
         (
             "20260202_add_users_timezone",
             [("users", "timezone", "TEXT")],
+            [],
         ),
         (
             "20260202_add_queued_posts_forward_and_caption_fields",
@@ -233,14 +241,17 @@ async def _apply_migrations(db) -> None:  # type: ignore[no-untyped-def]
                 ("queued_posts", "forward_origin_chat_id", "INTEGER"),
                 ("queued_posts", "forward_origin_message_id", "INTEGER"),
             ],
+            [],
         ),
         (
             "20260316_add_queued_posts_pinned_at",
             [("queued_posts", "pinned_at", "TIMESTAMP")],
+            [],
         ),
         (
             "20260316_add_forward_origin_allowlist_channel_name",
             [("forward_origin_allowlist", "origin_channel_name", "TEXT")],
+            [],
         ),
         (
             "20260415_add_duplicate_detection_settings",
@@ -248,15 +259,26 @@ async def _apply_migrations(db) -> None:  # type: ignore[no-untyped-def]
                 ("channels", "duplicate_detection_enabled", "INTEGER DEFAULT 0"),
                 ("users", "duplicate_alerts_enabled", "INTEGER DEFAULT 1"),
             ],
+            [],
+        ),
+        (
+            "20260420_add_schedules_next_planned_run_at",
+            [("schedules", "next_planned_run_at", "TIMESTAMP")],
+            [
+                "CREATE INDEX IF NOT EXISTS idx_schedules_next_planned_run_at "
+                "ON schedules(next_planned_run_at)"
+            ],
         ),
     ]
 
     applied = await _get_applied_migrations(db)
-    for migration_id, columns in migrations:
+    for migration_id, columns, extra_sql in migrations:
         if migration_id in applied:
             continue
         for table, column, sql_type in columns:
             await _ensure_column(db, table=table, column=column, sql_type=sql_type)
+        for statement in extra_sql:
+            await db.execute(statement)
         await db.execute(
             "INSERT INTO schema_migrations (id) VALUES (?)",
             (migration_id,),

@@ -133,7 +133,7 @@ def calculate_next_run(
             hours = int(pattern.get("hours", 0) or 0)
             minutes = int(pattern.get("minutes", 0) or 0)
             delta = timedelta(hours=hours, minutes=minutes)
-            if delta.total_seconds() <= 0:
+            if delta.total_seconds() <= 0:  # pragma: no cover  # guarded upstream by validate_schedule_pattern
                 raise ValueError("Interval must be greater than 0.")
             return after_utc + delta
 
@@ -143,14 +143,14 @@ def calculate_next_run(
         case "weekly":
             return _next_weekly_occurrence(after_utc, pattern["days"], pattern["times"], tz)
 
-        case _:
+        case _:  # pragma: no cover  # guarded upstream by validate_schedule_pattern
             raise ValueError("Unknown schedule type.")
 
 
 def _next_daily_occurrence(after_utc: datetime, times: list[str], tz: tzinfo) -> datetime:
     after_local = after_utc.astimezone(tz)
     parsed_times = sorted({parse_time_string(t) for t in times if parse_time_string(t)})
-    if not parsed_times:
+    if not parsed_times:  # pragma: no cover  # guarded upstream by validate_schedule_pattern
         raise ValueError("Daily schedule has no valid times.")
 
     # Check remaining times today.
@@ -176,7 +176,7 @@ def _next_weekly_occurrence(
     day_set = {WEEKDAY_NAME_TO_INT[d.lower()] for d in days}
 
     parsed_times = sorted({parse_time_string(t) for t in times if parse_time_string(t)})
-    if not parsed_times:
+    if not parsed_times:  # pragma: no cover  # guarded upstream by validate_schedule_pattern
         raise ValueError("Weekly schedule has no valid times.")
 
     # Search up to 14 days ahead to handle sparse weekly patterns.
@@ -197,4 +197,4 @@ def _next_weekly_occurrence(
             if candidate_local > after_local:
                 return candidate_local.astimezone(timezone.utc)
 
-    raise ValueError("Could not compute next weekly occurrence.")
+    raise ValueError("Could not compute next weekly occurrence.")  # pragma: no cover  # 14-day search always finds a slot when validate_schedule_pattern accepts the input
