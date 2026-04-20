@@ -62,7 +62,9 @@ CREATE INDEX IF NOT EXISTS idx_schedules_channel_id ON schedules(channel_id);
 CREATE INDEX IF NOT EXISTS idx_schedules_state ON schedules(state);
 CREATE INDEX IF NOT EXISTS idx_schedules_last_run ON schedules(last_run_at);
 CREATE INDEX IF NOT EXISTS idx_schedules_state_active ON schedules(state) WHERE state = 'active';
-CREATE INDEX IF NOT EXISTS idx_schedules_next_planned_run_at ON schedules(next_planned_run_at);
+-- Index for next_planned_run_at is created by the corresponding migration in
+-- _apply_migrations(); placing it here would crash upgrades whose existing
+-- schedules table predates the column.
 
 CREATE TABLE IF NOT EXISTS queued_posts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

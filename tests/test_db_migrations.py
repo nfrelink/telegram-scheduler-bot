@@ -76,6 +76,77 @@ async def test_init_database_creates_media_fingerprints_and_duplicate_columns(db
 
 
 @pytest.mark.asyncio
+async def test_init_database_migrates_legacy_schedules_to_next_planned_run_at(db_env) -> None:
+    """Simulate a pre-Phase-1.1 schedules table missing next_planned_run_at.
+
+    Regression test: SCHEMA_SQL must not reference next_planned_run_at in any
+    statement that runs before _apply_migrations(), or upgrades crash with
+    "no such column: next_planned_run_at" against any existing schedules row.
+    """
+    async with aiosqlite.connect(db_env) as conn:
+        await conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS channels (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                channel_id TEXT NOT NULL UNIQUE,
+                channel_name TEXT NOT NULL,
+                verified_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE
+            );
+            CREATE TABLE IF NOT EXISTS schedules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                pattern TEXT NOT NULL,
+                timezone TEXT DEFAULT 'UTC',
+                state TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_run_at TIMESTAMP
+            );
+            """
+        )
+        await conn.execute(
+            "INSERT INTO channels (user_id, channel_id, channel_name) VALUES (1, '-100', 'ch')"
+        )
+        await conn.execute(
+            "INSERT INTO schedules (channel_id, name, pattern) VALUES (1, 'n', '{}')"
+        )
+        await conn.commit()
+
+    from database import init_database
+
+    await init_database()
+
+    async with aiosqlite.connect(db_env) as conn:
+        conn.row_factory = aiosqlite.Row
+
+        cur = await conn.execute("PRAGMA table_info(schedules)")
+        cols = {r[1] for r in await cur.fetchall()}
+        assert "next_planned_run_at" in cols
+
+        cur = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = ?",
+            ("idx_schedules_next_planned_run_at",),
+        )
+        assert await cur.fetchone() is not None
+
+        cur = await conn.execute(
+            "SELECT 1 FROM schema_migrations WHERE id = ?",
+            ("20260420_add_schedules_next_planned_run_at",),
+        )
+        assert await cur.fetchone() is not None
+
+        cur = await conn.execute(
+            "SELECT id, next_planned_run_at FROM schedules WHERE channel_id = 1"
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        assert row["next_planned_run_at"] is None
+
+
+@pytest.mark.asyncio
 async def test_migration_adds_duplicate_columns_to_existing_schema(db_env) -> None:
     """Simulate a DB with existing tables but missing duplicate detection columns."""
     async with aiosqlite.connect(db_env) as conn:
