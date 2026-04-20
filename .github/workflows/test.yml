@@ -1,0 +1,40 @@
+name: tests
+
+on:
+  push:
+    branches:
+      - main
+      - "refactor/**"
+  pull_request:
+
+jobs:
+  pytest:
+    name: pytest (Python 3.14)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest with coverage
+        run: >
+          python -m pytest -q
+          --cov=src
+          --cov-branch
+          --cov-report=term-missing
+
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/ruff-action@v4
