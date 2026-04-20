@@ -453,16 +453,23 @@ async def get_active_schedules() -> list[dict[str, Any]]:
         return schedules
 
 
+async def _update_schedule_state_in_tx(
+    db, schedule_id: int, state: str, *, user_id: int
+) -> None:  # type: ignore[no-untyped-def]
+    """In-transaction body for update_schedule_state. Caller owns the tx."""
+    await db.execute(
+        """
+        UPDATE schedules SET state = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
+        """,
+        (state, schedule_id, user_id),
+    )
+
+
 async def update_schedule_state(schedule_id: int, state: str, *, user_id: int) -> None:
     """Update schedule state."""
     async with transaction() as db:
-        await db.execute(
-            """
-            UPDATE schedules SET state = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)
-            """,
-            (state, schedule_id, user_id),
-        )
+        await _update_schedule_state_in_tx(db, schedule_id, state, user_id=user_id)
 
 
 async def resume_schedule(schedule_id: int, *, user_id: int) -> None:
@@ -521,13 +528,18 @@ async def update_schedule_timezone(schedule_id: int, *, timezone_name: str, user
         )
 
 
+async def _update_schedule_last_run_in_tx(db, schedule_id: int) -> None:  # type: ignore[no-untyped-def]
+    """In-transaction body for update_schedule_last_run. Caller owns the tx."""
+    await db.execute(
+        "UPDATE schedules SET last_run_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (schedule_id,),
+    )
+
+
 async def update_schedule_last_run(schedule_id: int) -> None:
     """Update last_run_at timestamp."""
     async with transaction() as db:
-        await db.execute(
-            "UPDATE schedules SET last_run_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (schedule_id,),
-        )
+        await _update_schedule_last_run_in_tx(db, schedule_id)
 
 
 async def delete_schedule(schedule_id: int, *, user_id: int) -> None:
@@ -772,35 +784,44 @@ async def get_queue_count(schedule_id: int) -> int:
         return int(row[0])  # type: ignore[index]
 
 
+async def _delete_queued_post_in_tx(db, post_id: int, *, user_id: int) -> None:  # type: ignore[no-untyped-def]
+    """In-transaction body for delete_queued_post. Caller owns the tx.
+
+    Silently no-ops if the post doesn't exist or isn't owned by user_id —
+    matches the public function's defence-in-depth ownership check.
+    """
+    cursor = await db.execute(
+        """
+        SELECT qp.schedule_id, qp.position
+        FROM queued_posts qp
+        JOIN schedules s ON qp.schedule_id = s.id
+        JOIN channels c ON s.channel_id = c.id
+        WHERE qp.id = ? AND c.user_id = ?
+        """,
+        (post_id, user_id),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return
+
+    schedule_id = int(row[0])  # type: ignore[index]
+    deleted_position = int(row[1])  # type: ignore[index]
+
+    await db.execute("DELETE FROM queued_posts WHERE id = ?", (post_id,))
+    await db.execute(
+        """
+        UPDATE queued_posts
+        SET position = position - 1
+        WHERE schedule_id = ? AND position > ?
+        """,
+        (schedule_id, deleted_position),
+    )
+
+
 async def delete_queued_post(post_id: int, *, user_id: int) -> None:
     """Delete post from queue and compact positions for FIFO ordering."""
     async with transaction() as db:
-        cursor = await db.execute(
-            """
-            SELECT qp.schedule_id, qp.position
-            FROM queued_posts qp
-            JOIN schedules s ON qp.schedule_id = s.id
-            JOIN channels c ON s.channel_id = c.id
-            WHERE qp.id = ? AND c.user_id = ?
-            """,
-            (post_id, user_id),
-        )
-        row = await cursor.fetchone()
-        if row is None:
-            return
-
-        schedule_id = int(row[0])  # type: ignore[index]
-        deleted_position = int(row[1])  # type: ignore[index]
-
-        await db.execute("DELETE FROM queued_posts WHERE id = ?", (post_id,))
-        await db.execute(
-            """
-            UPDATE queued_posts
-            SET position = position - 1
-            WHERE schedule_id = ? AND position > ?
-            """,
-            (schedule_id, deleted_position),
-        )
+        await _delete_queued_post_in_tx(db, post_id, user_id=user_id)
 
 
 async def get_queued_post_with_owner(post_id: int) -> dict[str, Any] | None:
@@ -848,12 +869,21 @@ async def bulk_update_posts_scheduled_for(post_updates: list[tuple[int, datetime
         )
 
 
+async def _update_post_retry_in_tx(
+    db, post_id: int, *, retry_count: int, scheduled_for: datetime
+) -> None:  # type: ignore[no-untyped-def]
+    """In-transaction body for update_post_retry. Caller owns the tx."""
+    await db.execute(
+        "UPDATE queued_posts SET retry_count = ?, scheduled_for = ? WHERE id = ?",
+        (retry_count, to_sqlite_timestamp(scheduled_for), post_id),
+    )
+
+
 async def update_post_retry(post_id: int, *, retry_count: int, scheduled_for: datetime) -> None:
     """Update retry count and next attempt time."""
     async with transaction() as db:
-        await db.execute(
-            "UPDATE queued_posts SET retry_count = ?, scheduled_for = ? WHERE id = ?",
-            (retry_count, to_sqlite_timestamp(scheduled_for), post_id),
+        await _update_post_retry_in_tx(
+            db, post_id, retry_count=retry_count, scheduled_for=scheduled_for
         )
 
 
@@ -1006,6 +1036,31 @@ async def get_schedule_state_counts() -> dict[str, int]:
         return out
 
 
+async def _increment_delivery_stats_daily_in_tx(
+    db,
+    *,
+    day: date,
+    posts_sent_delta: int = 0,
+    send_failures_delta: int = 0,
+) -> None:  # type: ignore[no-untyped-def]
+    """In-transaction body for increment_delivery_stats_daily. Caller owns the tx."""
+    if posts_sent_delta == 0 and send_failures_delta == 0:
+        return
+
+    day_str = day.isoformat()
+    await db.execute(
+        """
+        INSERT INTO delivery_stats_daily (day, posts_sent, send_failures)
+        VALUES (?, ?, ?)
+        ON CONFLICT(day) DO UPDATE SET
+            posts_sent = posts_sent + excluded.posts_sent,
+            send_failures = send_failures + excluded.send_failures,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (day_str, int(posts_sent_delta), int(send_failures_delta)),
+    )
+
+
 async def increment_delivery_stats_daily(
     *,
     day: date,
@@ -1016,18 +1071,12 @@ async def increment_delivery_stats_daily(
     if posts_sent_delta == 0 and send_failures_delta == 0:
         return
 
-    day_str = day.isoformat()
     async with transaction() as db:
-        await db.execute(
-            """
-            INSERT INTO delivery_stats_daily (day, posts_sent, send_failures)
-            VALUES (?, ?, ?)
-            ON CONFLICT(day) DO UPDATE SET
-                posts_sent = posts_sent + excluded.posts_sent,
-                send_failures = send_failures + excluded.send_failures,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-            (day_str, int(posts_sent_delta), int(send_failures_delta)),
+        await _increment_delivery_stats_daily_in_tx(
+            db,
+            day=day,
+            posts_sent_delta=posts_sent_delta,
+            send_failures_delta=send_failures_delta,
         )
 
 
@@ -1291,29 +1340,39 @@ async def add_fingerprints_bulk(
     return ids
 
 
+async def _mark_fingerprint_posted_in_tx(db, queued_post_id: int) -> None:  # type: ignore[no-untyped-def]
+    """In-transaction body for mark_fingerprint_posted. Caller owns the tx."""
+    await db.execute(
+        """
+        UPDATE media_fingerprints
+        SET posted_at = CURRENT_TIMESTAMP
+        WHERE queued_post_id = ?
+        """,
+        (queued_post_id,),
+    )
+
+
 async def mark_fingerprint_posted(queued_post_id: int) -> None:
     """Set posted_at on fingerprints linked to a queued post."""
     async with transaction() as db:
-        await db.execute(
-            """
-            UPDATE media_fingerprints
-            SET posted_at = CURRENT_TIMESTAMP
-            WHERE queued_post_id = ?
-            """,
-            (queued_post_id,),
-        )
+        await _mark_fingerprint_posted_in_tx(db, queued_post_id)
+
+
+async def _delete_unposted_fingerprints_in_tx(db, queued_post_id: int) -> None:  # type: ignore[no-untyped-def]
+    """In-transaction body for delete_unposted_fingerprints. Caller owns the tx."""
+    await db.execute(
+        """
+        DELETE FROM media_fingerprints
+        WHERE queued_post_id = ? AND posted_at IS NULL
+        """,
+        (queued_post_id,),
+    )
 
 
 async def delete_unposted_fingerprints(queued_post_id: int) -> None:
     """Delete fingerprints for a queued post that was never posted."""
     async with transaction() as db:
-        await db.execute(
-            """
-            DELETE FROM media_fingerprints
-            WHERE queued_post_id = ? AND posted_at IS NULL
-            """,
-            (queued_post_id,),
-        )
+        await _delete_unposted_fingerprints_in_tx(db, queued_post_id)
 
 
 async def remove_staging_item_by_position(user_id: int, position: int) -> None:
@@ -1356,4 +1415,75 @@ async def get_channel_by_id_for_user(user_id: int, channel_db_id: int) -> dict[s
     if channel is None or int(channel["user_id"]) != int(user_id):
         return None
     return channel
+
+
+# --- Atomic orchestrators --------------------------------------------------
+#
+# These wrap several smaller writes in a single transaction so that a crash
+# (or any exception) between steps cannot leave the database in a partially
+# updated state. Prefer these over calling the constituent helpers in sequence
+# from outside the database layer.
+
+
+async def complete_post_send(
+    *,
+    post_id: int,
+    schedule_id: int,
+    owner_user_id: int,
+    day: date,
+) -> None:
+    """Atomically apply all post-success state mutations.
+
+    Combines: increment posts_sent, mark fingerprints posted, delete the queued
+    post (with FIFO position compaction), bump schedule.last_run_at.
+    """
+    async with transaction() as db:
+        await _increment_delivery_stats_daily_in_tx(db, day=day, posts_sent_delta=1)
+        await _mark_fingerprint_posted_in_tx(db, post_id)
+        await _delete_queued_post_in_tx(db, post_id, user_id=owner_user_id)
+        await _update_schedule_last_run_in_tx(db, schedule_id)
+
+
+async def complete_post_retry(
+    *,
+    post_id: int,
+    retry_count: int,
+    scheduled_for: datetime,
+    day: date,
+) -> None:
+    """Atomically record a delivery failure and reschedule the post for retry."""
+    async with transaction() as db:
+        await _increment_delivery_stats_daily_in_tx(db, day=day, send_failures_delta=1)
+        await _update_post_retry_in_tx(
+            db, post_id, retry_count=retry_count, scheduled_for=scheduled_for
+        )
+
+
+async def complete_post_failure_pause(
+    *,
+    schedule_id: int,
+    owner_user_id: int,
+    day: date,
+) -> None:
+    """Atomically record the final delivery failure and pause the schedule.
+
+    The post itself is left in the queue with an exhausted retry_count so the
+    user can inspect/delete it before resuming.
+    """
+    async with transaction() as db:
+        await _increment_delivery_stats_daily_in_tx(db, day=day, send_failures_delta=1)
+        await _update_schedule_state_in_tx(db, schedule_id, "paused", user_id=owner_user_id)
+
+
+async def cancel_queued_post(*, post_id: int, user_id: int) -> None:
+    """Atomically remove a queued post and any unposted fingerprints linked to it.
+
+    Callers must verify ownership upstream (e.g. via get_queued_post_with_owner);
+    _delete_queued_post_in_tx still re-checks via JOIN as a defence-in-depth
+    guard, but _delete_unposted_fingerprints_in_tx does not, so a hostile direct
+    call here would still drop the fingerprint rows.
+    """
+    async with transaction() as db:
+        await _delete_unposted_fingerprints_in_tx(db, post_id)
+        await _delete_queued_post_in_tx(db, post_id, user_id=user_id)
 

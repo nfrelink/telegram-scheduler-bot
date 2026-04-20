@@ -229,10 +229,12 @@ async def _process_schedule(
     ok = await send_post(bot, telegram_channel_id=telegram_channel_id, post=post)
 
     if ok:
-        await db.increment_delivery_stats_daily(day=now.date(), posts_sent_delta=1)
-        await db.mark_fingerprint_posted(post_id)
-        await db.delete_queued_post(post_id, user_id=owner_user_id)
-        await db.update_schedule_last_run(schedule_id)
+        await db.complete_post_send(
+            post_id=post_id,
+            schedule_id=schedule_id,
+            owner_user_id=owner_user_id,
+            day=now.date(),
+        )
         return
 
     await _handle_post_failure(
@@ -282,12 +284,15 @@ async def _handle_post_failure(
 
     retry_count = int(post.get("retry_count") or 0) + 1
 
-    await db.increment_delivery_stats_daily(day=now.date(), send_failures_delta=1)
-
     if retry_count <= MAX_RETRIES:
         delay_minutes = 2 ** retry_count  # 2, 4, 8
         retry_time = now + timedelta(minutes=delay_minutes)
-        await db.update_post_retry(post_id, retry_count=retry_count, scheduled_for=retry_time)
+        await db.complete_post_retry(
+            post_id=post_id,
+            retry_count=retry_count,
+            scheduled_for=retry_time,
+            day=now.date(),
+        )
         logger.warning(
             "Post id=%s failed (retry %s/%s) scheduled for %s",
             post_id,
@@ -298,7 +303,11 @@ async def _handle_post_failure(
         return
 
     # Stop the schedule to avoid repeated failures/spam; user can delete the post and resume.
-    await db.update_schedule_state(schedule_id, "paused", user_id=owner_user_id)
+    await db.complete_post_failure_pause(
+        schedule_id=schedule_id,
+        owner_user_id=owner_user_id,
+        day=now.date(),
+    )
 
     channel_name = schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
     schedule_name = schedule.get("name") or f"Schedule {schedule_id}"
