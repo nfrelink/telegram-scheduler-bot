@@ -46,7 +46,11 @@ async def start_scheduler(bot: ExtBot) -> None:  # pragma: no cover
 
     rate_limiter = RateLimiter(min_interval_seconds=3.0)
 
-    logger.info("Scheduler started (check interval: %ss)", check_interval)
+    logger.info(
+        "Scheduler started (check interval: %ss)",
+        check_interval,
+        extra={"event": "scheduler_started", "check_interval_seconds": check_interval},
+    )
     await _catch_up_missed_posts()
 
     try:
@@ -54,12 +58,17 @@ async def start_scheduler(bot: ExtBot) -> None:  # pragma: no cover
             try:
                 await _process_due_schedules(bot, rate_limiter=rate_limiter)
             except Exception as e:
-                logger.error("Error in scheduler tick: %s", e, exc_info=True)
+                logger.error(
+                    "Error in scheduler tick: %s",
+                    e,
+                    exc_info=True,
+                    extra={"event": "scheduler_tick_error"},
+                )
 
             sleep_seconds = await _get_sleep_seconds(check_interval)
             await asyncio.sleep(sleep_seconds)
     except asyncio.CancelledError:
-        logger.info("Scheduler cancelled")
+        logger.info("Scheduler cancelled", extra={"event": "scheduler_cancelled"})
         raise
 
 
@@ -166,12 +175,28 @@ async def _catch_up_missed_posts() -> None:
                 len(updates),
                 schedule_id,
                 new_next_planned.isoformat(),
+                extra={
+                    "event": "catchup_scheduled",
+                    "schedule_id": schedule_id,
+                    "scheduled_count": len(updates),
+                    "next_planned_run_at": new_next_planned.isoformat(),
+                },
             )
         except Exception as e:
-            logger.error("Catch-up failed for schedule id=%s: %s", schedule_id, e, exc_info=True)
+            logger.error(
+                "Catch-up failed for schedule id=%s: %s",
+                schedule_id,
+                e,
+                exc_info=True,
+                extra={"event": "catchup_failed", "schedule_id": schedule_id},
+            )
 
     if total_scheduled:
-        logger.info("Catch-up scheduled %s posts total", total_scheduled)
+        logger.info(
+            "Catch-up scheduled %s posts total",
+            total_scheduled,
+            extra={"event": "catchup_summary", "total_scheduled": total_scheduled},
+        )
 
 
 def _catchup_cursor(schedule: dict[str, Any], *, now: datetime) -> datetime | None:
@@ -204,7 +229,16 @@ async def _process_due_schedules(bot: ExtBot, *, rate_limiter: RateLimiter) -> N
         try:
             await _process_schedule(bot, schedule, now=now, rate_limiter=rate_limiter)
         except Exception as e:
-            logger.error("Error processing schedule id=%s: %s", schedule.get("id"), e, exc_info=True)
+            logger.error(
+                "Error processing schedule id=%s: %s",
+                schedule.get("id"),
+                e,
+                exc_info=True,
+                extra={
+                    "event": "schedule_tick_error",
+                    "schedule_id": schedule.get("id"),
+                },
+            )
 
     await _heartbeat_check(bot, now=now, active_count=len(schedules))
 
@@ -277,7 +311,18 @@ async def _process_schedule(
                 ]
             ),
         )
-        logger.warning("Paused schedule id=%s due to invalid pattern: %s", schedule_id, reason)
+        logger.warning(
+            "Paused schedule id=%s due to invalid pattern: %s",
+            schedule_id,
+            reason,
+            extra={
+                "event": "schedule_paused_invalid_pattern",
+                "schedule_id": schedule_id,
+                "channel_id": telegram_channel_id,
+                "owner_user_id": owner_user_id,
+                "reason": reason,
+            },
+        )
         queue_depth = await db.count_queued_posts(schedule_id)
         await notifications.notify_admin(
             bot,
@@ -342,6 +387,20 @@ async def _process_schedule(
             owner_user_id=owner_user_id,
             day=now.date(),
             next_planned_run_at=new_next_planned,
+        )
+        logger.info(
+            "Sent post id=%s for schedule id=%s to channel=%s",
+            post_id,
+            schedule_id,
+            telegram_channel_id,
+            extra={
+                "event": "post_sent",
+                "schedule_id": schedule_id,
+                "post_id": post_id,
+                "channel_id": telegram_channel_id,
+                "owner_user_id": owner_user_id,
+                "next_planned_run_at": new_next_planned.isoformat(),
+            },
         )
         return
 
@@ -409,6 +468,15 @@ async def _handle_post_failure(
             retry_count,
             MAX_RETRIES,
             retry_time.isoformat(),
+            extra={
+                "event": "post_send_retry",
+                "schedule_id": schedule_id,
+                "post_id": post_id,
+                "retry_count": retry_count,
+                "max_retries": MAX_RETRIES,
+                "scheduled_for": retry_time.isoformat(),
+                "last_error": error_text,
+            },
         )
         return
 
@@ -443,6 +511,23 @@ async def _handle_post_failure(
     )
 
     queue_depth = await db.count_queued_posts(schedule_id)
+    logger.error(
+        "Paused schedule id=%s after %s failed send attempts on post id=%s: %s",
+        schedule_id,
+        retry_count,
+        post_id,
+        error_text or "(unavailable)",
+        extra={
+            "event": "schedule_paused_send_failure",
+            "schedule_id": schedule_id,
+            "channel_id": telegram_channel_id,
+            "owner_user_id": owner_user_id,
+            "post_id": post_id,
+            "retry_count": retry_count,
+            "last_error": error_text,
+            "queue_depth": queue_depth,
+        },
+    )
     await notifications.notify_admin(
         bot,
         event="schedule_paused_send_failure",
@@ -465,5 +550,11 @@ async def _notify_user(bot: ExtBot, user_id: int, message: str, entities) -> Non
     try:
         await bot.send_message(chat_id=user_id, text=message, entities=entities)
     except Exception as e:
-        logger.error("Failed to notify user %s: %s", user_id, e, exc_info=True)
+        logger.error(
+            "Failed to notify user %s: %s",
+            user_id,
+            e,
+            exc_info=True,
+            extra={"event": "user_notify_failed", "user_id": user_id},
+        )
 

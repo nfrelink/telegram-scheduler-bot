@@ -83,6 +83,11 @@ def _is_pickle_loadable(path: Path) -> bool:
             type(e).__name__,
             e,
             path,
+            extra={
+                "event": "persistence_corrupt",
+                "path": str(path),
+                "error_type": type(e).__name__,
+            },
         )
         return False
     except Exception:
@@ -90,6 +95,7 @@ def _is_pickle_loadable(path: Path) -> bool:
             "Unexpected failure while validating persistence file at %s; "
             "starting with a no-op persistence instead.",
             path,
+            extra={"event": "persistence_validation_failed", "path": str(path)},
         )
         return False
     return True
@@ -154,6 +160,10 @@ class _AtomicPicklePersistence(PicklePersistence):
                 logger.warning(
                     "Failed to remove temp persistence file %s after a write error",
                     tmp_path,
+                    extra={
+                        "event": "persistence_temp_cleanup_failed",
+                        "path": str(tmp_path),
+                    },
                 )
             raise
 
@@ -271,6 +281,10 @@ def build_persistence() -> BasePersistence:
             "Could not create persistence directory %s; starting with a "
             "no-op persistence instead.",
             path.parent,
+            extra={
+                "event": "persistence_directory_failed",
+                "path": str(path.parent),
+            },
         )
         return _NoopPersistence()
 

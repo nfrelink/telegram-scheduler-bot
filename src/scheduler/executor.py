@@ -70,6 +70,13 @@ async def send_post(
                 telegram_channel_id,
                 e,
                 exc_info=True,
+                extra={
+                    "event": "forward_failed",
+                    "post_id": post.get("id"),
+                    "channel_id": telegram_channel_id,
+                    "from_chat_id": forward_from_chat_id,
+                    "from_message_id": forward_from_message_id,
+                },
             )
             return False, _format_error(e)
 
@@ -119,6 +126,12 @@ async def send_post(
             telegram_channel_id,
             e,
             exc_info=True,
+            extra={
+                "event": "send_failed",
+                "post_id": post.get("id"),
+                "channel_id": telegram_channel_id,
+                "media_type": media_type,
+            },
         )
         return False, _format_error(e)
 
@@ -232,10 +245,20 @@ async def _retry_with_download(
                 caption_entities=entities,
             )
 
-        logger.info("Recovered by downloading and re-uploading media_type=%s", media_type)
+        logger.info(
+            "Recovered by downloading and re-uploading media_type=%s",
+            media_type,
+            extra={"event": "send_recovered_via_download", "media_type": media_type},
+        )
         return True
     except Exception as e:
-        logger.error("Download fallback failed for media_type=%s: %s", media_type, e, exc_info=True)
+        logger.error(
+            "Download fallback failed for media_type=%s: %s",
+            media_type,
+            e,
+            exc_info=True,
+            extra={"event": "download_fallback_failed", "media_type": media_type},
+        )
         return False
     finally:
         try:

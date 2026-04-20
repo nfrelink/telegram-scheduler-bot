@@ -48,9 +48,16 @@ async def register_commands(application: Application) -> None:
     """Register the bot's command menu with Telegram."""
     try:
         await application.bot.set_my_commands(USER_COMMANDS)
-        logger.info("Registered %d bot commands with Telegram", len(USER_COMMANDS))
+        logger.info(
+            "Registered %d bot commands with Telegram",
+            len(USER_COMMANDS),
+            extra={"event": "commands_registered", "count": len(USER_COMMANDS)},
+        )
     except Exception:
-        logger.exception("Failed to register bot commands")
+        logger.exception(
+            "Failed to register bot commands",
+            extra={"event": "commands_register_failed"},
+        )
 
 
 def _safe_update_meta(update: object) -> dict[str, object]:
@@ -84,6 +91,13 @@ async def error_handler(update: object, context) -> None:  # type: ignore[no-unt
         "Unhandled exception while processing update (meta=%s)",
         meta,
         exc_info=context.error,
+        extra={
+            "event": "unhandled_bot_error",
+            "update_id": meta.get("update_id"),
+            "user_id": meta.get("user_id"),
+            "chat_id": meta.get("chat_id"),
+            "message_id": meta.get("message_id"),
+        },
     )
 
     err = context.error

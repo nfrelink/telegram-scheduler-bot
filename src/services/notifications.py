@@ -148,16 +148,32 @@ async def notify_admin(
     """
     admin_user_id = _get_admin_user_id()
     if admin_user_id is None:
-        logger.debug("notify_admin skipped: ADMIN_USER_ID unset (event=%s)", event)
+        logger.debug(
+            "notify_admin skipped: ADMIN_USER_ID unset (event=%s)",
+            event,
+            extra={"event": "notify_admin_skipped_no_admin", "notify_event": event},
+        )
         return
 
     key = debounce_key if debounce_key is not None else event
     if not _should_send(key):
-        logger.debug("notify_admin suppressed by debounce (key=%s)", key)
+        logger.debug(
+            "notify_admin suppressed by debounce (key=%s)",
+            key,
+            extra={
+                "event": "notify_admin_debounced",
+                "notify_event": event,
+                "debounce_key": key,
+            },
+        )
         return
 
     text = format_message(event, lines)
     try:
         await bot.send_message(chat_id=admin_user_id, text=text)
     except Exception:
-        logger.exception("Failed to send admin notification (event=%s)", event)
+        logger.exception(
+            "Failed to send admin notification (event=%s)",
+            event,
+            extra={"event": "notify_admin_send_failed", "notify_event": event},
+        )

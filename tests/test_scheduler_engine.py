@@ -901,3 +901,85 @@ async def test_heartbeat_silent_when_active_but_never_fired(
     )
 
     assert _admin_dms_to(bot, 9999) == []
+
+
+# ---------------------------------------------------------------------------
+# Structured-logging guard tests
+#
+# These exist so that a future refactor cannot silently drop the `event=`
+# tag from the two log records production observability depends on most:
+# `post_sent` (the heartbeat of healthy operation) and
+# `schedule_paused_send_failure` (the loudest "something is wrong" signal).
+# The JSON formatter in `logging_setup` promotes anything in `extra` to a
+# top-level field; that's what `jq 'select(.event=="...")'` filters on.
+# ---------------------------------------------------------------------------
+
+
+def _records_with_event(caplog, event: str) -> list:
+    return [r for r in caplog.records if getattr(r, "event", None) == event]
+
+
+@pytest.mark.asyncio
+async def test_post_sent_log_carries_structured_event(
+    initialized_db, monkeypatch, caplog
+) -> None:
+    schedule = await _mk(8301, "301", pattern={"type": "interval", "minutes": 30})
+    sid = int(schedule["id"])
+    await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "p1"}])
+
+    now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
+    await _set_next_planned_run_at(sid, now - timedelta(seconds=1))
+    schedule = await _reload(sid)
+
+    monkeypatch.setattr(engine, "send_post", AsyncMock(return_value=(True, None)))
+    bot = _make_bot()
+
+    with caplog.at_level("INFO", logger="scheduler.engine"):
+        await engine._process_schedule(
+            bot, schedule, now=now, rate_limiter=RateLimiter(min_interval_seconds=0)
+        )
+
+    records = _records_with_event(caplog, "post_sent")
+    assert len(records) == 1, "post_sent record missing or duplicated"
+    rec = records[0]
+    assert rec.schedule_id == sid
+    assert rec.channel_id == "-100301"
+    assert getattr(rec, "post_id") is not None
+
+
+@pytest.mark.asyncio
+async def test_schedule_paused_send_failure_log_carries_structured_event(
+    initialized_db, monkeypatch, caplog
+) -> None:
+    monkeypatch.setenv("ADMIN_USER_ID", "9999")
+    schedule = await _mk(8302, "302", pattern={"type": "interval", "minutes": 30})
+    sid = int(schedule["id"])
+    await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "p1"}])
+    posts = await db.get_queued_posts(sid, limit=1)
+    pid = int(posts[0]["id"])
+
+    now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
+    await db.update_post_retry(
+        pid, retry_count=engine.MAX_RETRIES, scheduled_for=now - timedelta(minutes=1)
+    )
+    schedule = await _reload(sid)
+
+    monkeypatch.setattr(
+        engine,
+        "send_post",
+        AsyncMock(return_value=(False, "BadRequest: chat not found")),
+    )
+    bot = _make_bot()
+
+    with caplog.at_level("ERROR", logger="scheduler.engine"):
+        await engine._process_schedule(
+            bot, schedule, now=now, rate_limiter=RateLimiter(min_interval_seconds=0)
+        )
+
+    records = _records_with_event(caplog, "schedule_paused_send_failure")
+    assert len(records) == 1, "schedule_paused_send_failure record missing or duplicated"
+    rec = records[0]
+    assert rec.schedule_id == sid
+    assert rec.post_id == pid
+    assert rec.retry_count == engine.MAX_RETRIES + 1
+    assert "chat not found" in (rec.last_error or "")
