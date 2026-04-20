@@ -207,9 +207,19 @@ async def _process_schedule(
         last_run_at = parse_timestamp(schedule.get("last_run_at"))
         created_at = parse_timestamp(schedule.get("created_at"))
         base_after = last_run_at or created_at or now
-        cutoff = now - timedelta(seconds=FIFO_LOOKBACK_GRACE_SECONDS)
-        if base_after < cutoff:
-            base_after = cutoff
+
+        # The grace clamp prevents the regular tick from firing arbitrarily
+        # old "missed" wall-clock slots (that's _catch_up_missed_posts' job).
+        # It only applies to daily/weekly, where calculate_next_run picks the
+        # next absolute clock time after `base_after` and a stale value can
+        # pull in an in-past slot. Interval patterns use relative spacing
+        # (`base_after + delta`); clamping there would suppress legitimate
+        # posts whenever last_run_at is older than the grace window.
+        pattern_type = (schedule.get("pattern") or {}).get("type")
+        if pattern_type in ("daily", "weekly"):
+            cutoff = now - timedelta(seconds=FIFO_LOOKBACK_GRACE_SECONDS)
+            if base_after < cutoff:
+                base_after = cutoff
 
         next_run = calculate_next_run(schedule, after=base_after)
         if now < next_run:

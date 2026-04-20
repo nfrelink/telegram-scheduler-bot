@@ -13,13 +13,17 @@ import sys
 import warnings
 from typing import Final
 
+# The filter must be installed before importing python-telegram-bot
+# (transitively pulled in via `from bot import ...`); otherwise the
+# per_message=False UserWarning fires at import time before the filter is
+# active. The deferred imports below are intentional — do not reorder.
 warnings.filterwarnings("ignore", message=r".*per_message=False.*", category=UserWarning)
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv  # noqa: E402
 
-from bot import create_application, register_commands
-from database import init_database
-from scheduler import start_scheduler
+from bot import create_application, register_commands  # noqa: E402
+from database import init_database  # noqa: E402
+from scheduler import start_scheduler  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
