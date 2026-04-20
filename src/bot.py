@@ -26,6 +26,7 @@ from handlers.selection import select_callback, select_command
 from handlers.timezone_management import gettimezone_command, settimezone_command, timezone_callback, timezone_command
 from handlers.user_commands import help_command, pending_media_nudge, start_command
 from handlers.verification import channel_post_handler
+from persistence import build_persistence
 
 logger = logging.getLogger(__name__)
 _TELEGRAM_TEXT_LIMIT = 4096
@@ -168,7 +169,12 @@ def create_application() -> Application:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
-    application = Application.builder().token(token).build()
+    application = (
+        Application.builder()
+        .token(token)
+        .persistence(build_persistence())
+        .build()
+    )
 
     # Core user commands
     application.add_handler(CommandHandler("start", start_command))

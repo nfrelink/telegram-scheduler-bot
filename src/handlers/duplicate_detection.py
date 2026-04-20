@@ -120,4 +120,6 @@ duplicates_conversation_handler = ConversationHandler(
         ],
     },
     fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    name="duplicates",
+    persistent=True,
 )

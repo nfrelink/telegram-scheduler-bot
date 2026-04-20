@@ -932,6 +932,8 @@ pin_date_conversation_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", pin_date_cancel)],
     per_message=False,
+    name="pin_date",
+    persistent=True,
 )
 
 

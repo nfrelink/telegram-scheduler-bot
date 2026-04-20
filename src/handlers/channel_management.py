@@ -299,4 +299,6 @@ channels_conversation_handler = ConversationHandler(
         ],
     },
     fallbacks=[CommandHandler("cancel", channels_cancel)],
+    name="channels",
+    persistent=True,
 )

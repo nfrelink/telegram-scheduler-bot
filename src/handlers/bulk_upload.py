@@ -1371,5 +1371,7 @@ bulk_upload_conversation_handler = ConversationHandler(
         ],
     },
     fallbacks=[CommandHandler("cancel", bulk_cancel)],
+    name="bulk_upload",
+    persistent=True,
 )
 

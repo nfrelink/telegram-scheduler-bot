@@ -221,4 +221,6 @@ forward_conversation_handler = ConversationHandler(
         ],
     },
     fallbacks=[CommandHandler("cancel", forward_cancel)],
+    name="forward",
+    persistent=True,
 )

@@ -836,4 +836,6 @@ schedules_conversation_handler = ConversationHandler(
         ES_WAIT_WEEKLY_TIMES: [MessageHandler(_MSG_HANDLER, editschedule_set_weekly_times)],
     },
     fallbacks=[CommandHandler("cancel", schedule_cancel)],
+    name="schedules",
+    persistent=True,
 )
