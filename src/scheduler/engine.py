@@ -24,6 +24,7 @@ MAX_RETRIES = 3
 CATCHUP_SPACING_SECONDS = int(os.getenv("CATCHUP_SPACING_SECONDS", "30"))
 CATCHUP_MAX_RUNS_PER_SCHEDULE = int(os.getenv("CATCHUP_MAX_RUNS_PER_SCHEDULE", "5"))
 CATCHUP_MAX_ITERATIONS = 5000
+FIFO_LOOKBACK_GRACE_SECONDS = int(os.getenv("FIFO_LOOKBACK_GRACE_SECONDS", "300"))
 
 
 async def start_scheduler(bot: ExtBot) -> None:
@@ -206,6 +207,10 @@ async def _process_schedule(
         last_run_at = parse_timestamp(schedule.get("last_run_at"))
         created_at = parse_timestamp(schedule.get("created_at"))
         base_after = last_run_at or created_at or now
+        cutoff = now - timedelta(seconds=FIFO_LOOKBACK_GRACE_SECONDS)
+        if base_after < cutoff:
+            base_after = cutoff
+
         next_run = calculate_next_run(schedule, after=base_after)
         if now < next_run:
             return

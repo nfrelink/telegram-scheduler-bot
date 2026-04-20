@@ -736,6 +736,7 @@ async def _editschedule_finalize(update: Update, context: ContextTypes.DEFAULT_T
         return ConversationHandler.END
     s_id = int(raw_id)
     await db.update_schedule_pattern(s_id, pattern, user_id=update.effective_user.id)
+    await db.update_schedule_last_run(s_id)
     tz_name = str(context.user_data.get("es_timezone") or default_timezone_name())
     await update.message.reply_text(
         f"Pattern updated: {_pattern_summary(pattern, tz_name=tz_name)}"

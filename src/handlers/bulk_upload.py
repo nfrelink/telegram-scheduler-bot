@@ -9,6 +9,7 @@ from typing import Any
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageEntity, Update
 from telegram.constants import ChatType
+from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -907,6 +908,19 @@ async def _check_and_warn_duplicate(
             match_id = find_similar(dhash_val, existing_hashes)
             if match_id is not None:
                 match_info = await db.get_fingerprint(match_id)
+        except (TimedOut, NetworkError) as e:
+            logger.info(
+                "Skipping dHash for file_id=%s due to Telegram network error: %s",
+                item.file_id,
+                e,
+            )
+            fp_data = _get_fingerprint_data(context)
+            fp_data.append({
+                "file_unique_id": item.file_unique_id,
+                "dhash": None,
+                "file_id": item.file_id,
+                "media_type": item.media_type,
+            })
         except Exception:
             logger.warning("dHash computation failed for file_id=%s", item.file_id, exc_info=True)
     else:
