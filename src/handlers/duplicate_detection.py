@@ -9,6 +9,7 @@ from telegram.ext import CallbackQueryHandler, ContextTypes, ConversationHandler
 
 from database import queries as db
 from handlers.common import ensure_user_record
+from services import dedup
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +72,11 @@ async def duplicates_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         return ConversationHandler.END
 
     if data == "dupset:toggle_channel":
-        current = await db.get_channel_duplicate_detection(channel_db_id)
-        await db.set_channel_duplicate_detection(channel_db_id, enabled=not current)
+        current = await dedup.is_channel_scanning_enabled(channel_db_id)
+        await dedup.set_channel_scanning_enabled(channel_db_id, enabled=not current)
     elif data == "dupset:toggle_user":
-        current = await db.get_user_duplicate_alerts(user_id)
-        await db.set_user_duplicate_alerts(user_id, enabled=not current)
+        current = await dedup.is_user_alerts_enabled(user_id)
+        await dedup.set_user_alerts_enabled(user_id, enabled=not current)
     text, keyboard = await _build_status_message(user_id, channel_db_id, channel)
     try:
         await query.edit_message_text(text, reply_markup=keyboard)
@@ -87,8 +88,8 @@ async def duplicates_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def _build_status_message(
     user_id: int, channel_db_id: int, channel: dict
 ) -> tuple[str, InlineKeyboardMarkup]:
-    channel_enabled = await db.get_channel_duplicate_detection(channel_db_id)
-    user_enabled = await db.get_user_duplicate_alerts(user_id)
+    channel_enabled = await dedup.is_channel_scanning_enabled(channel_db_id)
+    user_enabled = await dedup.is_user_alerts_enabled(user_id)
 
     channel_name = channel.get("channel_name") or channel.get("channel_id") or "channel"
     channel_status = "enabled" if channel_enabled else "disabled"

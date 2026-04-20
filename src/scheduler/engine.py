@@ -15,6 +15,7 @@ from database.time import parse_timestamp
 from scheduler.executor import send_post
 from scheduler.rate_limiter import RateLimiter
 from scheduler.timing import calculate_next_run, validate_schedule_pattern
+from services import posting, scheduling
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,7 @@ async def _catch_up_missed_posts() -> None:
             # after `now`. This both backfills NULL on first migration tick
             # and prevents the regular tick from chewing through past slots.
             new_next_planned = calculate_next_run(schedule, after=now)
-            await db.update_schedule_next_planned_run(schedule_id, new_next_planned)
+            await scheduling.persist_next_run(schedule_id, new_next_planned)
 
             if missed <= 0:
                 continue
@@ -150,7 +151,7 @@ async def _catch_up_missed_posts() -> None:
                 post_id = int(post["id"])
                 updates.append((post_id, now + timedelta(seconds=CATCHUP_SPACING_SECONDS * i)))
 
-            await db.bulk_update_posts_scheduled_for(updates)
+            await posting.bulk_set_scheduled_for(updates)
             total_scheduled += len(updates)
 
             logger.info(
@@ -214,7 +215,7 @@ async def _process_schedule(
 
     ok, reason = validate_schedule_pattern(schedule.get("pattern") or {})
     if not ok:
-        await db.update_schedule_state(schedule_id, "paused", user_id=owner_user_id)
+        await scheduling.pause(schedule_id, user_id=owner_user_id)
         await _notify_user(
             bot,
             owner_user_id,
@@ -263,7 +264,7 @@ async def _process_schedule(
             # (e.g. created before the column existed and never caught up).
             # We persist immediately so the next tick has a consistent value.
             npa = calculate_next_run(schedule, after=now)
-            await db.update_schedule_next_planned_run(schedule_id, npa)
+            await scheduling.persist_next_run(schedule_id, npa)
         if now < npa:
             return
 
@@ -275,7 +276,7 @@ async def _process_schedule(
         # fired. For daily/weekly this picks the next clock time after the
         # actual fire; for interval it preserves cadence relative to fires.
         new_next_planned = calculate_next_run(schedule, after=now)
-        await db.complete_post_send(
+        await posting.complete_send(
             post_id=post_id,
             schedule_id=schedule_id,
             owner_user_id=owner_user_id,
@@ -297,7 +298,7 @@ async def _handle_empty_queue(bot: ExtBot, *, schedule: dict[str, Any], owner_us
     schedule_id = int(schedule["id"])
 
     # Avoid spamming: transition to empty_paused.
-    await db.update_schedule_state(schedule_id, "empty_paused", user_id=owner_user_id)
+    await scheduling.mark_empty(schedule_id, user_id=owner_user_id)
 
     channel_name = schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
     schedule_name = schedule.get("name") or f"Schedule {schedule_id}"
@@ -334,7 +335,7 @@ async def _handle_post_failure(
     if retry_count <= MAX_RETRIES:
         delay_minutes = 2 ** retry_count  # 2, 4, 8
         retry_time = now + timedelta(minutes=delay_minutes)
-        await db.complete_post_retry(
+        await posting.complete_retry(
             post_id=post_id,
             retry_count=retry_count,
             scheduled_for=retry_time,
@@ -350,7 +351,7 @@ async def _handle_post_failure(
         return
 
     # Stop the schedule to avoid repeated failures/spam; user can delete the post and resume.
-    await db.complete_post_failure_pause(
+    await posting.complete_failure_pause(
         schedule_id=schedule_id,
         owner_user_id=owner_user_id,
         day=now.date(),

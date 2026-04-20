@@ -291,7 +291,7 @@ async def test_fifo_fires_when_next_planned_run_at_now_or_past(
 
 
 # ---------------------------------------------------------------------------
-# Pattern-edit-then-tick (the bug Phase 1.1 structurally prevents)
+# Pattern-edit-then-tick must not fire a slot the new pattern places in the past
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio

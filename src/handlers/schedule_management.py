@@ -22,8 +22,8 @@ from telegram.ext import (
 
 from database import queries as db
 from handlers.common import ensure_user_record, parse_int
-from scheduler.state import recompute_next_run
 from scheduler.timing import WEEKDAY_NAME_TO_INT, parse_time_string, validate_schedule_pattern
+from services import scheduling
 from utils.tz import default_timezone_name, is_valid_timezone
 
 logger = logging.getLogger(__name__)
@@ -260,7 +260,7 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if schedule is None:
             await query.answer("Schedule not found.", show_alert=True)
             return SM_SHOWING
-        await db.update_schedule_state(s_id, "paused", user_id=user_id)
+        await scheduling.pause(s_id, user_id=user_id)
         await _refresh_list(user_id, context, query)
         return SM_SHOWING
 
@@ -280,10 +280,7 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 "Queue is empty — add posts with /bulk before resuming.", show_alert=True
             )
             return SM_SHOWING
-        await db.resume_schedule(s_id, user_id=user_id)
-        # Resume implies "start ticking from now": recompute the next planned
-        # slot so the engine doesn't fire a back-dated daily/weekly slot.
-        await recompute_next_run(s_id)
+        await scheduling.resume(s_id, user_id=user_id)
         await _refresh_list(user_id, context, query)
         return SM_SHOWING
 
@@ -324,7 +321,7 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if schedule is None:
             await query.answer("Schedule not found.", show_alert=True)
             return SM_SHOWING
-        await db.delete_schedule(s_id, user_id=user_id)
+        await scheduling.delete(s_id, user_id=user_id)
         logger.info("User %s deleted schedule %s", user_id, s_id)
         await _refresh_list(user_id, context, query)
         return SM_SHOWING
@@ -436,10 +433,9 @@ async def schedules_tz_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await msg.reply_text("Schedule not found.")
         return ConversationHandler.END
 
-    await db.update_schedule_timezone(int(s_id), timezone_name=raw, user_id=update.effective_user.id)
-    # Timezone change can move daily/weekly slots; recompute so the next tick
-    # uses the new wall-clock target.
-    await recompute_next_run(int(s_id))
+    await scheduling.update_timezone(
+        int(s_id), timezone_name=raw, user_id=update.effective_user.id
+    )
     logger.info("User %s set timezone of schedule %s to %s", update.effective_user.id, s_id, raw)
     await msg.reply_text(f"Timezone for '{schedule['name']}' set to {raw}.")
     context.user_data.pop("sm_settp_schedule_id", None)
@@ -572,7 +568,7 @@ async def _newschedule_finalize(update: Update, context: ContextTypes.DEFAULT_TY
     is_first_schedule = not prior_ctx.get("selected_schedule_id")
     name = str(context.user_data.get("ns_name"))
     tz_name = str(context.user_data.get("ns_timezone") or default_timezone_name())
-    schedule = await db.create_schedule(
+    schedule = await scheduling.create(
         channel_db_id=channel_db_id,
         name=name,
         pattern=pattern,
@@ -635,7 +631,7 @@ async def editschedule_set_name(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Session expired. Use /schedules to start again.")
         return ConversationHandler.END
     s_id = int(raw_id)
-    await db.update_schedule_name(s_id, name=name, user_id=update.effective_user.id)
+    await scheduling.update_name(s_id, name=name, user_id=update.effective_user.id)
     await update.message.reply_text(f"Schedule renamed to '{name}'.")
     _clear_es_state(context)
     return ConversationHandler.END
@@ -742,11 +738,7 @@ async def _editschedule_finalize(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("Session expired. Use /schedules to start again.")
         return ConversationHandler.END
     s_id = int(raw_id)
-    await db.update_schedule_pattern(s_id, pattern, user_id=update.effective_user.id)
-    # The new pattern implies a new next-fire moment computed from `now`;
-    # recompute_next_run replaces the legacy "bump last_run_at" trick used
-    # before next_planned_run_at became canonical.
-    await recompute_next_run(s_id)
+    await scheduling.update_pattern(s_id, pattern, user_id=update.effective_user.id)
     tz_name = str(context.user_data.get("es_timezone") or default_timezone_name())
     await update.message.reply_text(
         f"Pattern updated: {_pattern_summary(pattern, tz_name=tz_name)}"
@@ -809,8 +801,9 @@ async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFA
     if not is_valid_timezone(raw_tz):
         await update.message.reply_text(f"Unknown timezone: {raw_tz!r}")
         return
-    await db.update_schedule_timezone(schedule_id, timezone_name=raw_tz, user_id=user_id)
-    await recompute_next_run(schedule_id)
+    await scheduling.update_timezone(
+        schedule_id, timezone_name=raw_tz, user_id=user_id
+    )
     await update.message.reply_text(f"Schedule {schedule_id} timezone set to {raw_tz}.")
 
 

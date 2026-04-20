@@ -19,6 +19,7 @@ from database import queries as db
 from database.time import parse_timestamp
 from handlers.common import ensure_user_record, parse_int
 from scheduler.timing import calculate_next_run
+from services import posting
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
@@ -477,7 +478,7 @@ async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_caption("Post not found or not owned by you.")
             return
 
-        await db.cancel_queued_post(post_id=post_id, user_id=user_id)
+        await posting.cancel(post_id=post_id, user_id=user_id)
 
         # Stay at the same offset; _build_queue_page clamps it to the new total.
         page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
@@ -527,7 +528,7 @@ async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_T
             await query.edit_message_caption("Post not found or not owned by you.")
             return
 
-        await db.clear_post_pinned_at(post_id, user_id=user_id)
+        await posting.unpin(post_id, user_id=user_id)
 
         page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
         if page is None:
@@ -676,7 +677,7 @@ async def delete_post_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text("Post not found or not owned by you.")
         return
 
-    await db.cancel_queued_post(post_id=post_id, user_id=update.effective_user.id)
+    await posting.cancel(post_id=post_id, user_id=update.effective_user.id)
     text, entities = render([Segment("Post "), Segment(str(post_id), code=True), Segment(" deleted.")])
     await update.message.reply_text(text, entities=entities)
 
@@ -900,7 +901,7 @@ async def pin_date_got_time(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         context.user_data.pop("pin_date", None)
         return _PIN_WAITING_DATE
 
-    await db.set_post_pinned_at(post_id, utc_dt, user_id=update.effective_user.id)
+    await posting.pin(post_id, pinned_at=utc_dt, user_id=update.effective_user.id)
     context.user_data.pop("pin_post_id", None)
     context.user_data.pop("pin_date", None)
     context.user_data.pop("pin_user_tz", None)

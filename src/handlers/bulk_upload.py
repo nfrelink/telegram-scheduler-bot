@@ -22,7 +22,8 @@ from telegram.ext import (
 from database import queries as db
 from handlers.common import ensure_user_record
 from handlers.selection import selection_segments
-from utils.image_hash import compute_dhash, find_similar
+from services import dedup, posting, scheduling
+from utils.image_hash import compute_dhash
 from utils.tg_text import Segment, render, utf16_len
 
 logger = logging.getLogger(__name__)
@@ -866,71 +867,40 @@ async def _check_and_warn_duplicate(
 ) -> None:
     """Run two-layer duplicate check and send a warning with action buttons if matched."""
     user_id = update.effective_user.id if update.effective_user else 0
-    if not await db.get_channel_duplicate_detection(channel_db_id):
+
+    def _record_fp(dhash: str | None) -> None:
         _get_fingerprint_data(context).append({
             "file_unique_id": item.file_unique_id,
-            "dhash": None,
+            "dhash": dhash,
             "file_id": item.file_id,
             "media_type": item.media_type,
         })
-        return
-    if not await db.get_user_duplicate_alerts(user_id):
-        _get_fingerprint_data(context).append({
-            "file_unique_id": item.file_unique_id,
-            "dhash": None,
-            "file_id": item.file_id,
-            "media_type": item.media_type,
-        })
+
+    if not await dedup.should_check(channel_db_id=channel_db_id, user_id=user_id):
+        _record_fp(None)
         return
 
-    match_info: dict[str, Any] | None = None
+    # Layer 1: exact file_unique_id match (all media types, zero cost).
+    match_info = await dedup.find_by_file_unique_id(channel_db_id, item.file_unique_id)
 
-    # Layer 1: exact file_unique_id match (all media types, zero cost)
-    existing = await db.find_fingerprint_by_file_unique_id(channel_db_id, item.file_unique_id)
-    if existing:
-        match_info = existing
-
-    # Layer 2: perceptual dHash match (photos only, requires download of thumbnail)
+    # Layer 2: perceptual dHash match (photos only, requires thumbnail download).
     if match_info is None and item.media_type == "photo" and update.message and update.message.photo:
         try:
             smallest_file_id = update.message.photo[0].file_id
             dhash_val = await compute_dhash(context.bot, smallest_file_id)
-
-            fp_data = _get_fingerprint_data(context)
-            fp_data.append({
-                "file_unique_id": item.file_unique_id,
-                "dhash": str(dhash_val),
-                "file_id": item.file_id,
-                "media_type": item.media_type,
-            })
-
-            existing_hashes = await db.get_channel_dhashes(channel_db_id)
-            match_id = find_similar(dhash_val, existing_hashes)
-            if match_id is not None:
-                match_info = await db.get_fingerprint(match_id)
+            _record_fp(str(dhash_val))
+            match_info = await dedup.find_by_dhash(channel_db_id, dhash_val)
         except (TimedOut, NetworkError) as e:
             logger.info(
                 "Skipping dHash for file_id=%s due to Telegram network error: %s",
                 item.file_id,
                 e,
             )
-            fp_data = _get_fingerprint_data(context)
-            fp_data.append({
-                "file_unique_id": item.file_unique_id,
-                "dhash": None,
-                "file_id": item.file_id,
-                "media_type": item.media_type,
-            })
+            _record_fp(None)
         except Exception:
             logger.warning("dHash computation failed for file_id=%s", item.file_id, exc_info=True)
     else:
-        fp_data = _get_fingerprint_data(context)
-        fp_data.append({
-            "file_unique_id": item.file_unique_id,
-            "dhash": None,
-            "file_id": item.file_id,
-            "media_type": item.media_type,
-        })
+        _record_fp(None)
 
     if match_info is None:
         return
@@ -1256,24 +1226,19 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     posts = _get_posts(context)
-    inserted, post_ids = await db.add_queued_posts_bulk(schedule_id, posts)
-
-    # Persist accumulated fingerprints, linking to the newly created queued posts.
     channel_db_id = context.user_data.get("bulk_channel_db_id")
     fp_data = _get_fingerprint_data(context)
-    if fp_data and channel_db_id:
-        file_id_to_post_id: dict[str, int] = {}
-        for post_dict, pid in zip(posts, post_ids):
-            fid = post_dict.get("file_id")
-            if fid:
-                file_id_to_post_id[fid] = pid
-        for fp in fp_data:
-            fp["queued_post_id"] = file_id_to_post_id.get(fp.get("file_id", ""))
-        await db.add_fingerprints_bulk(int(channel_db_id), fp_data)
+
+    inserted, _post_ids = await posting.enqueue_bulk(
+        schedule_id,
+        posts=posts,
+        fingerprints=fp_data if fp_data else None,
+        channel_db_id=int(channel_db_id) if channel_db_id else None,
+    )
 
     # If it was empty_paused, it is no longer empty; keep it paused.
     if schedule.get("state") == "empty_paused":
-        await db.update_schedule_state(schedule_id, "paused", user_id=update.effective_user.id)
+        await scheduling.pause(schedule_id, user_id=update.effective_user.id)
 
     await _clear_staging(update.effective_user.id)
     _state_clear(context)
