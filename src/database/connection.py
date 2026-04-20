@@ -30,6 +30,15 @@ async def get_db() -> AsyncIterator[aiosqlite.Connection]:
     try:
         async with aiosqlite.connect(db_path) as db:
             await db.execute("PRAGMA foreign_keys = ON;")
+            # WAL is database-file-level and idempotent; setting it on every
+            # open is harmless and self-documenting. Eliminates the
+            # rollback-journal full-file lock so reads never block writes
+            # and concurrent transactions on separate connections do not
+            # serialise on the OS file lock.
+            await db.execute("PRAGMA journal_mode = WAL;")
+            # Per-connection back-off (5s) so transient lock contention
+            # retries instead of immediately raising "database is locked".
+            await db.execute("PRAGMA busy_timeout = 5000;")
             db.row_factory = aiosqlite.Row
             yield db
     except sqlite3.OperationalError as e:

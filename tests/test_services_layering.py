@@ -45,18 +45,15 @@ _FORBIDDEN_SCHEDULING: frozenset[str] = frozenset({
     "update_schedule_timezone",
     "update_schedule_name",
     "update_schedule_next_planned_run",
-    "update_schedule_last_run",
     "resume_schedule",
     "delete_schedule",
 })
 
 # posting.*
 _FORBIDDEN_POSTING: frozenset[str] = frozenset({
-    "add_queued_post",
     "add_queued_posts_bulk",
     "delete_queued_post",
     "update_post_retry",
-    "update_post_scheduled_for",
     "bulk_update_posts_scheduled_for",
     "set_post_pinned_at",
     "clear_post_pinned_at",

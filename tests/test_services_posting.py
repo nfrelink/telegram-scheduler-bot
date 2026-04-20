@@ -40,19 +40,8 @@ async def _today_stats() -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# enqueue / enqueue_bulk
+# enqueue_bulk
 # ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_enqueue_appends_to_fifo(initialized_db) -> None:
-    user_id = 8001
-    _, sid = await _seed_user_channel_schedule(user_id, tg_id="-8001")
-    await posting.enqueue(schedule_id=sid, media_type="photo", file_id="e1")
-    await posting.enqueue(schedule_id=sid, media_type="photo", file_id="e2")
-    posts = await db.get_queued_posts(sid, limit=10)
-    assert [p["file_id"] for p in posts] == ["e1", "e2"]
-    assert [int(p["position"]) for p in posts] == [0, 1]
-
 
 @pytest.mark.asyncio
 async def test_enqueue_bulk_links_fingerprints_by_file_id(initialized_db) -> None:
@@ -100,7 +89,7 @@ async def test_enqueue_bulk_skips_fingerprints_when_none(initialized_db) -> None
 
 
 # ---------------------------------------------------------------------------
-# pin / unpin / set_scheduled_for
+# pin / unpin / bulk_set_scheduled_for
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
@@ -118,15 +107,16 @@ async def test_pin_and_unpin_roundtrip(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_scheduled_for_and_bulk(initialized_db) -> None:
+async def test_bulk_set_scheduled_for_applies_to_all_ids(initialized_db) -> None:
     user_id = 8005
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-8005")
     _, ids = await db.add_queued_posts_bulk(
         sid, [{"media_type": "photo", "file_id": "a"}, {"media_type": "photo", "file_id": "b"}]
     )
     base = datetime.now(timezone.utc) + timedelta(seconds=30)
-    await posting.set_scheduled_for(ids[0], scheduled_for=base)
-    await posting.bulk_set_scheduled_for([(ids[1], base + timedelta(seconds=15))])
+    await posting.bulk_set_scheduled_for(
+        [(ids[0], base), (ids[1], base + timedelta(seconds=15))]
+    )
     posts = await db.get_queued_posts(sid, limit=10)
     assert all(parse_timestamp(p["scheduled_for"]) is not None for p in posts)
 

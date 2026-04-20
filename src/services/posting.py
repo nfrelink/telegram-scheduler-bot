@@ -26,38 +26,6 @@ logger = logging.getLogger(__name__)
 # Enqueue
 # ---------------------------------------------------------------------------
 
-async def enqueue(
-    *,
-    schedule_id: int,
-    media_type: str,
-    file_id: str | None = None,
-    file_path: str | None = None,
-    caption: str | None = None,
-    caption_parse_mode: str | None = None,
-    caption_entities: str | None = None,
-    forward_from_chat_id: int | None = None,
-    forward_from_message_id: int | None = None,
-    forward_origin_chat_id: int | None = None,
-    forward_origin_message_id: int | None = None,
-    media_group_data: str | None = None,
-) -> None:
-    """Append one queued post to the end of a schedule's FIFO queue."""
-    await db.add_queued_post(
-        schedule_id=schedule_id,
-        media_type=media_type,
-        file_id=file_id,
-        file_path=file_path,
-        caption=caption,
-        caption_parse_mode=caption_parse_mode,
-        caption_entities=caption_entities,
-        forward_from_chat_id=forward_from_chat_id,
-        forward_from_message_id=forward_from_message_id,
-        forward_origin_chat_id=forward_origin_chat_id,
-        forward_origin_message_id=forward_origin_message_id,
-        media_group_data=media_group_data,
-    )
-
-
 async def enqueue_bulk(
     schedule_id: int,
     *,
@@ -92,15 +60,8 @@ async def enqueue_bulk(
 
 
 # ---------------------------------------------------------------------------
-# Schedule attachment for a single queued post (catch-up / retry)
+# Schedule attachment for queued posts (catch-up / retry)
 # ---------------------------------------------------------------------------
-
-async def set_scheduled_for(
-    post_id: int, *, scheduled_for: datetime | None
-) -> None:
-    """Set (or clear) `scheduled_for` for a queued post."""
-    await db.update_post_scheduled_for(post_id, scheduled_for=scheduled_for)
-
 
 async def bulk_set_scheduled_for(post_updates: list[tuple[int, datetime]]) -> None:
     """Set `scheduled_for` for multiple posts in one transaction."""

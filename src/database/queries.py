@@ -490,11 +490,12 @@ async def update_schedule_state(schedule_id: int, state: str, *, user_id: int) -
 
 
 async def resume_schedule(schedule_id: int, *, user_id: int) -> None:
-    """Set a schedule active and reset last_run_at to now.
+    """Set a schedule active. Stamps `last_run_at` to now for audit/history.
 
-    Resetting last_run_at ensures the next post fires at the next scheduled
-    time *after* now rather than immediately (which would happen if last_run_at
-    is from a long time ago).
+    The "fires at the next scheduled slot, not immediately" guarantee is
+    provided by `services.scheduling.resume()`, which calls
+    `recompute_next_run` after this query returns; this query itself does
+    not read or set `next_planned_run_at`.
     """
     async with transaction() as db:
         await db.execute(
@@ -546,17 +547,16 @@ async def update_schedule_timezone(schedule_id: int, *, timezone_name: str, user
 
 
 async def _update_schedule_last_run_in_tx(db, schedule_id: int) -> None:  # type: ignore[no-untyped-def]
-    """In-transaction body for update_schedule_last_run. Caller owns the tx."""
+    """Stamp `last_run_at = CURRENT_TIMESTAMP` for `schedule_id`.
+
+    Called from `services.posting.complete_send` inside a larger
+    transaction; no public standalone wrapper exists because no
+    out-of-tx caller currently needs one.
+    """
     await db.execute(
         "UPDATE schedules SET last_run_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         (schedule_id,),
     )
-
-
-async def update_schedule_last_run(schedule_id: int) -> None:
-    """Update last_run_at timestamp."""
-    async with transaction() as db:
-        await _update_schedule_last_run_in_tx(db, schedule_id)
 
 
 async def _update_schedule_next_planned_run_in_tx(
@@ -595,68 +595,6 @@ async def delete_schedule(schedule_id: int, *, user_id: int) -> None:
 
 
 # --- Queue ------------------------------------------------------------------
-
-
-async def add_queued_post(
-    *,
-    schedule_id: int,
-    media_type: str,
-    file_id: str | None = None,
-    file_path: str | None = None,
-    caption: str | None = None,
-    caption_parse_mode: str | None = None,
-    caption_entities: str | None = None,
-    forward_from_chat_id: int | None = None,
-    forward_from_message_id: int | None = None,
-    forward_origin_chat_id: int | None = None,
-    forward_origin_message_id: int | None = None,
-    media_group_data: str | None = None,
-) -> None:
-    """Add a post to the end of a schedule's FIFO queue."""
-    async with transaction() as db:
-        cursor = await db.execute(
-            "SELECT COALESCE(MAX(position), -1) + 1 FROM queued_posts WHERE schedule_id = ?",
-            (schedule_id,),
-        )
-        next_position_row = await cursor.fetchone()
-        next_position = int(next_position_row[0])  # type: ignore[index]
-
-        await db.execute(
-            """
-            INSERT INTO queued_posts
-                (
-                    schedule_id,
-                    file_id,
-                    file_path,
-                    media_type,
-                    caption,
-                    caption_parse_mode,
-                    caption_entities,
-                    forward_from_chat_id,
-                    forward_from_message_id,
-                    forward_origin_chat_id,
-                    forward_origin_message_id,
-                    media_group_data,
-                    position
-                )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                schedule_id,
-                file_id,
-                file_path,
-                media_type,
-                caption,
-                caption_parse_mode,
-                caption_entities,
-                forward_from_chat_id,
-                forward_from_message_id,
-                forward_origin_chat_id,
-                forward_origin_message_id,
-                media_group_data,
-                next_position,
-            ),
-        )
 
 
 async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -> tuple[int, list[int]]:
@@ -923,16 +861,6 @@ async def get_queued_post_with_owner(post_id: int) -> dict[str, Any] | None:
         )
         row = await cursor.fetchone()
         return _row_to_dict(row)
-
-
-async def update_post_scheduled_for(post_id: int, *, scheduled_for: datetime | None) -> None:
-    """Set (or clear) scheduled_for for a queued post."""
-    scheduled_for_value = None if scheduled_for is None else to_sqlite_timestamp(scheduled_for)
-    async with transaction() as db:
-        await db.execute(
-            "UPDATE queued_posts SET scheduled_for = ? WHERE id = ?",
-            (scheduled_for_value, post_id),
-        )
 
 
 async def bulk_update_posts_scheduled_for(post_updates: list[tuple[int, datetime]]) -> None:
