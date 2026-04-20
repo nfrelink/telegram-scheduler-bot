@@ -15,7 +15,7 @@ from database.time import parse_timestamp
 from scheduler.executor import send_post
 from scheduler.rate_limiter import RateLimiter
 from scheduler.timing import calculate_next_run, validate_schedule_pattern
-from services import posting, scheduling
+from services import notifications, posting, scheduling
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,13 @@ MAX_RETRIES = 3
 CATCHUP_SPACING_SECONDS = int(os.getenv("CATCHUP_SPACING_SECONDS", "30"))
 CATCHUP_MAX_RUNS_PER_SCHEDULE = int(os.getenv("CATCHUP_MAX_RUNS_PER_SCHEDULE", "5"))
 CATCHUP_MAX_ITERATIONS = 5000
+
+# Heartbeat: if any active schedule exists but no active schedule has fired
+# within this window, the loop is presumed wedged and the admin gets pinged.
+# Default of 36h is generous: a once-a-day schedule (cron-style) can lapse a
+# whole day without false-positive, but a multi-times-per-day schedule going
+# silent for >36h is almost certainly broken.
+HEARTBEAT_MAX_HOURS = int(os.getenv("HEARTBEAT_MAX_HOURS", "36"))
 
 
 async def start_scheduler(bot: ExtBot) -> None:  # pragma: no cover
@@ -199,6 +206,44 @@ async def _process_due_schedules(bot: ExtBot, *, rate_limiter: RateLimiter) -> N
         except Exception as e:
             logger.error("Error processing schedule id=%s: %s", schedule.get("id"), e, exc_info=True)
 
+    await _heartbeat_check(bot, now=now, active_count=len(schedules))
+
+
+async def _heartbeat_check(bot: ExtBot, *, now: datetime, active_count: int) -> None:
+    """If any schedules are active but none has fired in `HEARTBEAT_MAX_HOURS`,
+    DM the admin. No-op when no schedules are active (silence is correct
+    when nothing is supposed to fire).
+
+    Debounced under a single global key, so a wedged loop pings once per
+    debounce window rather than once per tick.
+    """
+    if active_count <= 0:
+        return
+
+    latest = await db.get_latest_active_schedule_run_at()
+    if latest is None:
+        # Active schedules exist but none have ever fired. Could be a
+        # genuinely fresh deploy; rather than ping the admin on first boot,
+        # let last_run_at populate naturally and report on the next tick if
+        # it stays empty long enough.
+        return
+
+    age = now - latest
+    if age <= timedelta(hours=HEARTBEAT_MAX_HOURS):
+        return
+
+    await notifications.notify_admin(
+        bot,
+        event="scheduler_heartbeat_stalled",
+        lines=[
+            ("active_schedules", active_count),
+            ("latest_last_run_at", latest.isoformat()),
+            ("age_hours", round(age.total_seconds() / 3600, 1)),
+            ("threshold_hours", HEARTBEAT_MAX_HOURS),
+        ],
+        debounce_key="scheduler_heartbeat_stalled",
+    )
+
 
 async def _process_schedule(
     bot: ExtBot,
@@ -233,6 +278,21 @@ async def _process_schedule(
             ),
         )
         logger.warning("Paused schedule id=%s due to invalid pattern: %s", schedule_id, reason)
+        queue_depth = await db.count_queued_posts(schedule_id)
+        await notifications.notify_admin(
+            bot,
+            event="schedule_paused_invalid_pattern",
+            lines=[
+                ("schedule_id", schedule_id),
+                ("schedule_name", schedule_name),
+                ("channel_id", telegram_channel_id),
+                ("channel_name", channel_name),
+                ("owner_user_id", owner_user_id),
+                ("reason", reason),
+                ("queue_depth", queue_depth),
+            ],
+            debounce_key=f"schedule_paused_invalid_pattern:{schedule_id}",
+        )
         return
 
     post = await db.get_next_queued_post(schedule_id, now=now)
@@ -269,7 +329,7 @@ async def _process_schedule(
             return
 
     await rate_limiter.wait_if_needed(telegram_channel_id)
-    ok = await send_post(bot, telegram_channel_id=telegram_channel_id, post=post)
+    ok, error_text = await send_post(bot, telegram_channel_id=telegram_channel_id, post=post)
 
     if ok:
         # Compute the next planned slot from `now`, not from the slot we just
@@ -291,6 +351,7 @@ async def _process_schedule(
         post=post,
         owner_user_id=owner_user_id,
         now=now,
+        error_text=error_text,
     )
 
 
@@ -326,6 +387,7 @@ async def _handle_post_failure(
     post: dict[str, Any],
     owner_user_id: int,
     now: datetime,
+    error_text: str | None = None,
 ) -> None:
     post_id = int(post["id"])
     schedule_id = int(post["schedule_id"])
@@ -357,7 +419,8 @@ async def _handle_post_failure(
         day=now.date(),
     )
 
-    channel_name = schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
+    telegram_channel_id = schedule.get("telegram_channel_id") or "(unknown)"
+    channel_name = schedule.get("channel_name") or telegram_channel_id or "channel"
     schedule_name = schedule.get("name") or f"Schedule {schedule_id}"
 
     await _notify_user(
@@ -377,6 +440,24 @@ async def _handle_post_failure(
                 Segment(" to remove the post, then use /schedules to resume."),
             ]
         ),
+    )
+
+    queue_depth = await db.count_queued_posts(schedule_id)
+    await notifications.notify_admin(
+        bot,
+        event="schedule_paused_send_failure",
+        lines=[
+            ("schedule_id", schedule_id),
+            ("schedule_name", schedule_name),
+            ("channel_id", telegram_channel_id),
+            ("channel_name", channel_name),
+            ("owner_user_id", owner_user_id),
+            ("post_id", post_id),
+            ("retry_count", retry_count),
+            ("last_error", error_text or "(unavailable)"),
+            ("queue_depth", queue_depth),
+        ],
+        debounce_key=f"schedule_paused_send_failure:{schedule_id}",
     )
 
 

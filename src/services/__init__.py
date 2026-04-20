@@ -20,9 +20,11 @@ Rules of the layer:
     - Services use `database.queries.transaction()` for atomicity, composed
       from `_xxx_in_tx` helpers in queries.
     - No Telegram imports in services. They are unit-testable against the
-      DB alone.
+      DB alone. The single approved exception is `notifications`, a
+      side-effect adapter whose entire purpose is to talk to the bot;
+      `notifications` calls Telegram but never the database.
 """
 
-from . import dedup, posting, scheduling
+from . import dedup, notifications, posting, scheduling
 
-__all__ = ["dedup", "posting", "scheduling"]
+__all__ = ["dedup", "notifications", "posting", "scheduling"]

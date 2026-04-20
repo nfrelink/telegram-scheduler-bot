@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .connection import get_db, transaction
-from .time import to_sqlite_timestamp
+from .time import parse_timestamp, to_sqlite_timestamp
 
 
 def _row_to_dict(row) -> dict[str, Any] | None:  # type: ignore[no-untyped-def]
@@ -780,6 +780,46 @@ async def get_queued_posts(schedule_id: int, *, limit: int = 10, offset: int = 0
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+
+async def count_queued_posts(schedule_id: int) -> int:
+    """Return the number of posts currently in `schedule_id`'s queue.
+
+    Used by the engine's pause-detection sites to include queue depth in
+    the admin DM, so an operator can tell at a glance whether a paused
+    schedule has a backlog waiting to drain or is empty.
+    """
+    async with get_db() as db:
+        cursor = await db.execute(
+            "SELECT COUNT(*) AS n FROM queued_posts WHERE schedule_id = ?",
+            (schedule_id,),
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return 0
+        return int(row["n"])
+
+
+async def get_latest_active_schedule_run_at() -> datetime | None:
+    """Return MAX(last_run_at) across active schedules, or None if there
+    are no active schedules (or none have ever fired).
+
+    Used by the scheduler heartbeat: if active schedules exist but the
+    most recent fire is older than HEARTBEAT_MAX_HOURS, the loop is
+    presumed wedged and the admin gets pinged.
+    """
+    async with get_db() as db:
+        cursor = await db.execute(
+            """
+            SELECT MAX(last_run_at) AS latest
+            FROM schedules
+            WHERE state = 'active'
+            """,
+        )
+        row = await cursor.fetchone()
+        if row is None:
+            return None
+        return parse_timestamp(row["latest"])
 
 
 async def get_queued_posts_unscheduled(schedule_id: int, *, limit: int) -> list[dict[str, Any]]:

@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from bot import _ADMIN_ERROR_DM_LAST_SENT, error_handler
+from bot import error_handler
+from services import notifications
 
 
 def _mock_update() -> MagicMock:
@@ -20,8 +21,8 @@ def _mock_update() -> MagicMock:
 
 
 @pytest.fixture(autouse=True)
-def _clear_error_dm_cache() -> None:
-    _ADMIN_ERROR_DM_LAST_SENT.clear()
+def _clear_notification_state() -> None:
+    notifications.reset_debounce_state()
 
 
 @pytest.mark.asyncio
@@ -38,8 +39,10 @@ async def test_error_handler_sends_admin_dm(monkeypatch: pytest.MonkeyPatch) -> 
     context.bot.send_message.assert_awaited_once()
     call = context.bot.send_message.await_args
     assert call.kwargs["chat_id"] == 123456
-    assert "Unhandled bot error" in call.kwargs["text"]
-    assert "boom" in call.kwargs["text"]
+    text = call.kwargs["text"]
+    assert "unhandled_bot_error" in text
+    assert "boom" in text
+    assert "RuntimeError" in text
 
 
 @pytest.mark.asyncio

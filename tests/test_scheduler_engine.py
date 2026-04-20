@@ -4,6 +4,9 @@ Each test:
 - builds a real schedule + queue via DB queries
 - invokes _process_schedule with a fixed `now`
 - asserts side effects on DB rows + mocked bot/send_post
+
+`send_post` returns `(ok: bool, error_text: str | None)`; mocks here
+return that shape directly.
 """
 
 from __future__ import annotations
@@ -17,6 +20,14 @@ from database import queries as db
 from database.connection import get_db
 from scheduler import engine
 from scheduler.rate_limiter import RateLimiter
+from services import notifications
+
+
+@pytest.fixture(autouse=True)
+def _reset_notifications_state() -> None:
+    """Per-process debounce map can suppress an admin DM in a later test
+    if the previous test fired the same key first."""
+    notifications.reset_debounce_state()
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +121,7 @@ async def test_invalid_pattern_pauses_and_notifies(initialized_db, monkeypatch) 
         await conn.commit()
     schedule = await _reload(int(schedule["id"]))
 
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
 
     bot = _make_bot()
@@ -121,7 +132,8 @@ async def test_invalid_pattern_pauses_and_notifies(initialized_db, monkeypatch) 
     )
 
     assert send_mock.await_count == 0
-    bot.send_message.assert_awaited_once()
+    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8001]
+    assert len(user_calls) == 1
     refreshed = await _reload(int(schedule["id"]))
     assert refreshed["state"] == "paused"
 
@@ -133,7 +145,7 @@ async def test_invalid_pattern_pauses_and_notifies(initialized_db, monkeypatch) 
 @pytest.mark.asyncio
 async def test_empty_queue_transitions_to_empty_paused(initialized_db, monkeypatch) -> None:
     schedule = await _mk(8002, "002")
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
 
     bot = _make_bot()
@@ -144,7 +156,8 @@ async def test_empty_queue_transitions_to_empty_paused(initialized_db, monkeypat
     )
 
     assert send_mock.await_count == 0
-    bot.send_message.assert_awaited_once()
+    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8002]
+    assert len(user_calls) == 1
     refreshed = await _reload(int(schedule["id"]))
     assert refreshed["state"] == "empty_paused"
 
@@ -164,7 +177,7 @@ async def test_pinned_post_fires_when_pinned_at_due(initialized_db, monkeypatch)
     now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
     await db.set_post_pinned_at(pid, now - timedelta(hours=1), user_id=8003)
 
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -194,7 +207,7 @@ async def test_scheduled_for_in_future_does_not_fire(initialized_db, monkeypatch
     now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
     await db.bulk_update_posts_scheduled_for([(pid, now + timedelta(minutes=10))])
 
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -217,7 +230,7 @@ async def test_scheduled_for_in_past_fires(initialized_db, monkeypatch) -> None:
     now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
     await db.bulk_update_posts_scheduled_for([(pid, now - timedelta(minutes=1))])
 
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -246,7 +259,7 @@ async def test_fifo_does_not_fire_when_next_planned_run_in_future(
     await _set_next_planned_run_at(sid, now + timedelta(minutes=5))
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -272,7 +285,7 @@ async def test_fifo_fires_when_next_planned_run_at_now_or_past(
     await _set_next_planned_run_at(sid, now - timedelta(seconds=1))
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -317,7 +330,7 @@ async def test_pattern_edit_then_tick_does_not_fire_in_past_slot(
     await _set_next_planned_run_at(sid, next_slot_after_edit)
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -346,7 +359,7 @@ async def test_null_npr_on_active_schedule_is_backfilled(
     assert schedule["next_planned_run_at"] is None
 
     now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
-    send_mock = AsyncMock(return_value=True)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -377,7 +390,7 @@ async def test_send_failure_first_retry_schedules_future_attempt(initialized_db,
     await _set_next_planned_run_at(sid, now - timedelta(seconds=1))
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=False)
+    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found"))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -409,7 +422,7 @@ async def test_send_failure_after_max_retries_pauses_schedule(initialized_db, mo
     )
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=False)
+    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found"))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -418,7 +431,8 @@ async def test_send_failure_after_max_retries_pauses_schedule(initialized_db, mo
     )
 
     send_mock.assert_awaited_once()
-    bot.send_message.assert_awaited_once()
+    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8011]
+    assert len(user_calls) == 1
     refreshed = await _reload(sid)
     assert refreshed["state"] == "paused"
 
@@ -694,3 +708,196 @@ async def test_notify_user_swallows_send_message_failure(caplog) -> None:
     with caplog.at_level(logging.ERROR, logger="scheduler.engine"):
         await engine._notify_user(bot, 999, "hi", None)
     assert any("Failed to notify" in rec.message for rec in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Admin DMs on unexpected pause + heartbeat
+# ---------------------------------------------------------------------------
+#
+# These tests assert *which* events get reported to the admin and what the
+# payload looks like, in addition to the user-facing DM. They use the real
+# `services.notifications.notify_admin` path (not a mock) so the debounce-key
+# wiring and message formatting are exercised end-to-end.
+
+def _admin_dms_to(bot: MagicMock, admin_user_id: int) -> list[str]:
+    """Extract just the message texts from `bot.send_message` calls
+    addressed to the admin user id."""
+    return [
+        c.kwargs["text"]
+        for c in bot.send_message.await_args_list
+        if c.kwargs.get("chat_id") == admin_user_id
+    ]
+
+
+@pytest.mark.asyncio
+async def test_invalid_pattern_pauses_dms_user_and_admin(
+    initialized_db, monkeypatch
+) -> None:
+    """The invalid-pattern pause path emits both the existing user DM and
+    a new admin DM tagged `schedule_paused_invalid_pattern`."""
+    monkeypatch.setenv("ADMIN_USER_ID", "9999")
+
+    schedule = await _mk(8101, "101", pattern={"type": "interval", "minutes": 30})
+    async with get_db() as conn:
+        await conn.execute(
+            "UPDATE schedules SET pattern = ? WHERE id = ?",
+            ('{"type":"bogus"}', int(schedule["id"])),
+        )
+        await conn.commit()
+    schedule = await _reload(int(schedule["id"]))
+
+    bot = _make_bot()
+    now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
+
+    await engine._process_schedule(
+        bot, schedule, now=now, rate_limiter=RateLimiter(min_interval_seconds=0)
+    )
+
+    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8101]
+    admin_calls = _admin_dms_to(bot, 9999)
+    assert len(user_calls) == 1
+    assert len(admin_calls) == 1
+    text = admin_calls[0]
+    assert "schedule_paused_invalid_pattern" in text
+    assert f"- schedule_id: {int(schedule['id'])}" in text
+    assert "- queue_depth: 0" in text
+
+
+@pytest.mark.asyncio
+async def test_send_failure_after_max_retries_dms_admin_with_error(
+    initialized_db, monkeypatch
+) -> None:
+    """The send-failure pause path includes the threaded error text from
+    `send_post` and the per-schedule debounce key."""
+    monkeypatch.setenv("ADMIN_USER_ID", "9999")
+
+    schedule = await _mk(8102, "102", pattern={"type": "interval", "minutes": 30})
+    sid = int(schedule["id"])
+    await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "p1"}])
+    posts = await db.get_queued_posts(sid, limit=1)
+    pid = int(posts[0]["id"])
+
+    now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
+    await db.update_post_retry(
+        pid, retry_count=engine.MAX_RETRIES, scheduled_for=now - timedelta(minutes=1)
+    )
+    schedule = await _reload(sid)
+
+    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found"))
+    monkeypatch.setattr(engine, "send_post", send_mock)
+    bot = _make_bot()
+
+    await engine._process_schedule(
+        bot, schedule, now=now, rate_limiter=RateLimiter(min_interval_seconds=0)
+    )
+
+    admin_calls = _admin_dms_to(bot, 9999)
+    assert len(admin_calls) == 1
+    text = admin_calls[0]
+    assert "schedule_paused_send_failure" in text
+    assert "- last_error: BadRequest: chat not found" in text
+    assert f"- post_id: {pid}" in text
+
+
+@pytest.mark.asyncio
+async def test_empty_queue_does_not_dm_admin(
+    initialized_db, monkeypatch
+) -> None:
+    """Empty queue is the user running out of posts, not a bug; only the
+    user gets DM'd. Pinning this so a future change can't silently start
+    pinging the admin every time someone drains a queue."""
+    monkeypatch.setenv("ADMIN_USER_ID", "9999")
+
+    schedule = await _mk(8103, "103")
+    monkeypatch.setattr(engine, "send_post", AsyncMock(return_value=(True, None)))
+
+    bot = _make_bot()
+    now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
+
+    await engine._process_schedule(
+        bot, schedule, now=now, rate_limiter=RateLimiter(min_interval_seconds=0)
+    )
+
+    assert _admin_dms_to(bot, 9999) == []
+    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8103]
+    assert len(user_calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Heartbeat
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_heartbeat_pings_admin_when_active_schedules_are_stale(
+    initialized_db, monkeypatch
+) -> None:
+    """Active schedule with `last_run_at` older than HEARTBEAT_MAX_HOURS
+    triggers an admin DM. Uses the real query path."""
+    monkeypatch.setenv("ADMIN_USER_ID", "9999")
+    monkeypatch.setattr(engine, "HEARTBEAT_MAX_HOURS", 24)
+
+    sched = await _mk(8201, "201")
+    sid = int(sched["id"])
+    await _set_last_run_at(sid, datetime.now(timezone.utc) - timedelta(hours=48))
+
+    bot = _make_bot()
+    await engine._heartbeat_check(
+        bot, now=datetime.now(timezone.utc), active_count=1
+    )
+
+    admin_calls = _admin_dms_to(bot, 9999)
+    assert len(admin_calls) == 1
+    assert "scheduler_heartbeat_stalled" in admin_calls[0]
+    assert "- threshold_hours: 24" in admin_calls[0]
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_silent_when_recent_run(
+    initialized_db, monkeypatch
+) -> None:
+    monkeypatch.setenv("ADMIN_USER_ID", "9999")
+    monkeypatch.setattr(engine, "HEARTBEAT_MAX_HOURS", 24)
+
+    sched = await _mk(8202, "202")
+    sid = int(sched["id"])
+    await _set_last_run_at(sid, datetime.now(timezone.utc) - timedelta(hours=1))
+
+    bot = _make_bot()
+    await engine._heartbeat_check(
+        bot, now=datetime.now(timezone.utc), active_count=1
+    )
+
+    assert _admin_dms_to(bot, 9999) == []
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_silent_when_no_active_schedules(monkeypatch) -> None:
+    """No active schedules means nothing should be firing — silence is the
+    correct signal, not a stalled-loop alarm."""
+    monkeypatch.setenv("ADMIN_USER_ID", "9999")
+
+    bot = _make_bot()
+    await engine._heartbeat_check(
+        bot, now=datetime.now(timezone.utc), active_count=0
+    )
+
+    assert _admin_dms_to(bot, 9999) == []
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_silent_when_active_but_never_fired(
+    initialized_db, monkeypatch
+) -> None:
+    """A freshly-deployed bot with active schedules and no `last_run_at`
+    yet must not ping the admin on the very first tick — let the value
+    populate naturally."""
+    monkeypatch.setenv("ADMIN_USER_ID", "9999")
+
+    await _mk(8203, "203")  # last_run_at is NULL
+
+    bot = _make_bot()
+    await engine._heartbeat_check(
+        bot, now=datetime.now(timezone.utc), active_count=1
+    )
+
+    assert _admin_dms_to(bot, 9999) == []

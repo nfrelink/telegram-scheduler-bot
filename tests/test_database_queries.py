@@ -6,6 +6,7 @@ import pytest
 
 from database import transaction
 from database import queries as db
+from database.connection import get_db
 from database.time import parse_timestamp, to_sqlite_timestamp
 
 
@@ -412,3 +413,84 @@ async def test_bulk_staging_items_preserve_all_fields(initialized_db) -> None:
     assert item["raw_origin_chat_id"] == 555
     assert item["raw_origin_message_id"] == 666
     assert item["raw_origin_is_forwarded"] == 1  # SQLite stores booleans as ints
+
+
+# ---------------------------------------------------------------------------
+# count_queued_posts / get_latest_active_schedule_run_at
+# (added with admin notifications + heartbeat in Phase 2.2)
+# ---------------------------------------------------------------------------
+
+async def _mk_schedule_for_count(user_id: int, suffix: str, *, state: str = "active") -> int:
+    """Smallest path to a real schedule row; returns its id."""
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    channel = await db.create_channel(
+        user_id=user_id,
+        telegram_channel_id=f"-100{suffix}",
+        channel_name=f"Chan-{suffix}",
+    )
+    schedule = await db.create_schedule(
+        channel_db_id=int(channel["id"]),
+        name=f"Sched-{suffix}",
+        pattern={"type": "interval", "minutes": 30},
+        timezone_name="UTC",
+        state=state,
+    )
+    return int(schedule["id"])
+
+
+@pytest.mark.asyncio
+async def test_count_queued_posts_returns_zero_when_empty(initialized_db) -> None:
+    sid = await _mk_schedule_for_count(9001, "9001")
+    assert await db.count_queued_posts(sid) == 0
+
+
+@pytest.mark.asyncio
+async def test_count_queued_posts_counts_existing_rows(initialized_db) -> None:
+    sid = await _mk_schedule_for_count(9002, "9002")
+    await db.add_queued_posts_bulk(
+        sid, [{"media_type": "photo", "file_id": f"f{i}"} for i in range(5)]
+    )
+    assert await db.count_queued_posts(sid) == 5
+
+
+@pytest.mark.asyncio
+async def test_get_latest_active_schedule_run_at_with_no_active_schedules(initialized_db) -> None:
+    """Paused schedules are explicitly excluded — only active ones count
+    against the heartbeat timer."""
+    sid = await _mk_schedule_for_count(9003, "9003", state="paused")
+    async with get_db() as conn:
+        await conn.execute(
+            "UPDATE schedules SET last_run_at = ? WHERE id = ?",
+            ("2026-04-20 10:00:00", sid),
+        )
+        await conn.commit()
+    assert await db.get_latest_active_schedule_run_at() is None
+
+
+@pytest.mark.asyncio
+async def test_get_latest_active_schedule_run_at_returns_max_across_active(initialized_db) -> None:
+    sid_a = await _mk_schedule_for_count(9004, "9004a")
+    sid_b = await _mk_schedule_for_count(9004, "9004b")
+    sid_c = await _mk_schedule_for_count(9004, "9004c", state="paused")
+
+    async with get_db() as conn:
+        await conn.execute(
+            "UPDATE schedules SET last_run_at = ? WHERE id = ?",
+            ("2026-04-20 10:00:00", sid_a),
+        )
+        await conn.execute(
+            "UPDATE schedules SET last_run_at = ? WHERE id = ?",
+            ("2026-04-20 12:00:00", sid_b),
+        )
+        # The paused row has the latest timestamp but must be ignored.
+        await conn.execute(
+            "UPDATE schedules SET last_run_at = ? WHERE id = ?",
+            ("2026-04-20 23:00:00", sid_c),
+        )
+        await conn.commit()
+
+    latest = await db.get_latest_active_schedule_run_at()
+    assert latest is not None
+    assert latest == datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)

@@ -35,8 +35,16 @@ _INPUT_MEDIA: dict[str, type] = {
 }
 
 
-async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, Any]) -> bool:
+async def send_post(
+    bot: ExtBot, *, telegram_channel_id: str, post: dict[str, Any]
+) -> tuple[bool, str | None]:
     """Send a queued post to a Telegram channel.
+
+    Returns `(True, None)` on success, `(False, error_text)` on failure;
+    `error_text` is `f"{type(e).__name__}: {e}"` of the exception that
+    finally killed the attempt (after the file_id-error retry fallback,
+    if applicable). Callers thread the error string into the admin
+    notification when retries are exhausted.
 
     Supported media_type:
     - photo
@@ -54,7 +62,7 @@ async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, An
                 from_chat_id=int(forward_from_chat_id),
                 message_id=int(forward_from_message_id),
             )
-            return True
+            return True, None
         except Exception as e:
             logger.error(
                 "Failed to forward post id=%s to channel=%s: %s",
@@ -63,7 +71,7 @@ async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, An
                 e,
                 exc_info=True,
             )
-            return False
+            return False, _format_error(e)
 
     media_type = post.get("media_type")
     caption = post.get("caption")
@@ -74,7 +82,7 @@ async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, An
     file_path = post.get("file_path")
 
     try:
-        return await _send_post_once(
+        await _send_post_once(
             bot,
             telegram_channel_id=telegram_channel_id,
             post=post,
@@ -85,8 +93,8 @@ async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, An
             file_id=file_id,
             file_path=file_path,
         )
+        return True, None
     except Exception as e:
-        # Fallback: if file_id posting fails, download and re-upload once.
         if (
             file_id
             and not file_path
@@ -103,7 +111,7 @@ async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, An
                 caption_entities=caption_entities,
             )
             if ok:
-                return True
+                return True, None
 
         logger.error(
             "Failed to send post id=%s to channel=%s: %s",
@@ -112,7 +120,18 @@ async def send_post(bot: ExtBot, *, telegram_channel_id: str, post: dict[str, An
             e,
             exc_info=True,
         )
-        return False
+        return False, _format_error(e)
+
+
+def _format_error(exc: Exception) -> str:
+    """Render `exc` as `'Type: message'` for admin DMs.
+
+    Kept short and predictable so two distinct failures with the same
+    type+message still collide on the admin debounce key (per-schedule
+    scoping is what avoids cross-schedule suppression).
+    """
+    msg = str(exc).strip() or "(no message)"
+    return f"{type(exc).__name__}: {msg}"
 
 
 async def _send_post_once(
