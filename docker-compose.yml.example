@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: prod
     container_name: telegram_scheduler_bot
     restart: always
     env_file:

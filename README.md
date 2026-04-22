@@ -184,9 +184,12 @@ chmod 755 data/
 
 ### Database issues
 
+The production image does not ship with the `sqlite3` CLI. Inspect the
+database from the host instead — the file lives in the bind-mounted
+`./data/` directory:
+
 ```bash
-# Check database integrity
-docker compose exec bot sqlite3 /app/data/scheduler.db "PRAGMA integrity_check"
+sqlite3 ./data/scheduler.db "PRAGMA integrity_check"
 ```
 
 ## License

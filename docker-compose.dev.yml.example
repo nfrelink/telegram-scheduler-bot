@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: dev
     container_name: telegram_scheduler_bot_dev
     restart: unless-stopped
     env_file:
