@@ -1,4 +1,5 @@
 """Tests for src/utils/tg_text.py — utf16_len and render."""
+
 from __future__ import annotations
 
 from telegram import MessageEntity
@@ -9,6 +10,7 @@ from utils.tg_text import Segment, render, utf16_len
 # ---------------------------------------------------------------------------
 # utf16_len
 # ---------------------------------------------------------------------------
+
 
 def test_utf16_len_empty() -> None:
     assert utf16_len("") == 0
@@ -37,6 +39,7 @@ def test_utf16_len_mixed_string() -> None:
 # ---------------------------------------------------------------------------
 # render
 # ---------------------------------------------------------------------------
+
 
 def test_render_empty_segments() -> None:
     text, entities = render([])

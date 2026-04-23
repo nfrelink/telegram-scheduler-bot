@@ -24,6 +24,7 @@ async def _mk_channel(user_id: int, suffix: str) -> int:
 # Settings
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_channel_scanning_toggle_roundtrip(initialized_db) -> None:
     user_id = 7500
@@ -70,6 +71,7 @@ async def test_should_check_requires_both_toggles(initialized_db) -> None:
 # Match lookup
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_find_by_file_unique_id_hits_and_misses(initialized_db) -> None:
     user_id = 7503
@@ -77,8 +79,13 @@ async def test_find_by_file_unique_id_hits_and_misses(initialized_db) -> None:
     await db.add_fingerprints_bulk(
         ch_id,
         [
-            {"file_unique_id": "u-hit", "dhash": None, "file_id": "f1",
-             "media_type": "photo", "queued_post_id": None},
+            {
+                "file_unique_id": "u-hit",
+                "dhash": None,
+                "file_id": "f1",
+                "media_type": "photo",
+                "queued_post_id": None,
+            },
         ],
     )
     hit = await dedup.find_by_file_unique_id(ch_id, "u-hit")
@@ -88,15 +95,22 @@ async def test_find_by_file_unique_id_hits_and_misses(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_find_by_dhash_returns_match_when_within_threshold(initialized_db) -> None:
+async def test_find_by_dhash_returns_match_when_within_threshold(
+    initialized_db,
+) -> None:
     user_id = 7504
     ch_id = await _mk_channel(user_id, "504")
     # Seed a known dhash; query with the same value (Hamming distance 0).
     await db.add_fingerprints_bulk(
         ch_id,
         [
-            {"file_unique_id": "u-d", "dhash": "12345", "file_id": "f1",
-             "media_type": "photo", "queued_post_id": None},
+            {
+                "file_unique_id": "u-d",
+                "dhash": "12345",
+                "file_id": "f1",
+                "media_type": "photo",
+                "queued_post_id": None,
+            },
         ],
     )
     match = await dedup.find_by_dhash(ch_id, 12345)
@@ -121,8 +135,13 @@ async def test_find_by_dhash_returns_none_when_above_threshold(initialized_db) -
     await db.add_fingerprints_bulk(
         ch_id,
         [
-            {"file_unique_id": "u-far", "dhash": str(0), "file_id": "f1",
-             "media_type": "photo", "queued_post_id": None},
+            {
+                "file_unique_id": "u-far",
+                "dhash": str(0),
+                "file_id": "f1",
+                "media_type": "photo",
+                "queued_post_id": None,
+            },
         ],
     )
     # All-bits-on 64-bit value vs all-zero value → Hamming distance 64,

@@ -33,4 +33,3 @@ class RateLimiter:
                 await asyncio.sleep(wait_time)
 
         self._last_post_at[telegram_channel_id] = datetime.now(timezone.utc)
-

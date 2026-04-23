@@ -27,6 +27,7 @@ def _make_bot() -> MagicMock:
 # ADMIN_USER_ID gating
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_notify_admin_no_op_when_admin_user_id_unset(
     monkeypatch: pytest.MonkeyPatch,
@@ -56,6 +57,7 @@ async def test_notify_admin_no_op_when_admin_user_id_invalid(
 # Happy path
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_notify_admin_sends_with_formatted_payload(
     monkeypatch: pytest.MonkeyPatch,
@@ -81,6 +83,7 @@ async def test_notify_admin_sends_with_formatted_payload(
 # ---------------------------------------------------------------------------
 # Debounce
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_notify_admin_debounces_same_key(
@@ -161,6 +164,7 @@ async def test_notify_admin_invalid_debounce_falls_back_to_default(
 # Error tolerance
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_notify_admin_swallows_send_message_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -182,13 +186,12 @@ async def test_notify_admin_swallows_send_message_failure(
 # Formatting
 # ---------------------------------------------------------------------------
 
+
 def test_format_message_truncates_to_telegram_limit() -> None:
     """A chatty payload must be truncated to 4096 chars so the Bot API
     doesn't reject the notification itself."""
     huge_value = "x" * 8000
-    msg = notifications.format_message(
-        "evt", [("k1", huge_value), ("k2", "v2")]
-    )
+    msg = notifications.format_message("evt", [("k1", huge_value), ("k2", "v2")])
     assert len(msg) == 4096
     assert msg.endswith("...")
 

@@ -37,23 +37,29 @@ async def _list_text_and_keyboard(user_id: int) -> tuple[str, InlineKeyboardMark
             "During /bulk, messages forwarded from allowlisted channels are sent "
             "as native Telegram forwards, preserving 'Forwarded from ...' attribution."
         )
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Add channel", callback_data="fw:add")],
-        ])
+        keyboard = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("Add channel", callback_data="fw:add")],
+            ]
+        )
     else:
         n = len(origins)
         text = f"Forwarding allowlist — {n} channel{'s' if n > 1 else ''}:"
         rows: list[list[InlineKeyboardButton]] = []
         for cid, name in origins:
             label = name or str(cid)
-            rows.append([
-                InlineKeyboardButton(label, callback_data="fw:noop"),
-                InlineKeyboardButton("Remove", callback_data=f"fw:rm:{cid}"),
-            ])
-        rows.append([
-            InlineKeyboardButton("Add channel", callback_data="fw:add"),
-            InlineKeyboardButton("Clear all", callback_data="fw:clear"),
-        ])
+            rows.append(
+                [
+                    InlineKeyboardButton(label, callback_data="fw:noop"),
+                    InlineKeyboardButton("Remove", callback_data=f"fw:rm:{cid}"),
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton("Add channel", callback_data="fw:add"),
+                InlineKeyboardButton("Clear all", callback_data="fw:clear"),
+            ]
+        )
         keyboard = InlineKeyboardMarkup(rows)
     return text, keyboard
 
@@ -61,7 +67,11 @@ async def _list_text_and_keyboard(user_id: int) -> tuple[str, InlineKeyboardMark
 async def forward_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """/forward — show the allowlist with action buttons."""
     await ensure_user_record(update, context)
-    if update.message is None or update.effective_user is None or update.effective_chat is None:
+    if (
+        update.message is None
+        or update.effective_user is None
+        or update.effective_chat is None
+    ):
         return ConversationHandler.END
 
     text, keyboard = await _list_text_and_keyboard(update.effective_user.id)
@@ -111,10 +121,16 @@ async def forward_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         try:
             await query.edit_message_text(
                 f"Remove all {n} {label} from the forwarding allowlist?",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Yes, clear all", callback_data="fw:clearok"),
-                    InlineKeyboardButton("Cancel", callback_data="fw:back"),
-                ]]),
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "Yes, clear all", callback_data="fw:clearok"
+                            ),
+                            InlineKeyboardButton("Cancel", callback_data="fw:back"),
+                        ]
+                    ]
+                ),
             )
         except Exception:
             pass
@@ -141,7 +157,9 @@ async def forward_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return _SHOWING
 
 
-async def forward_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def forward_add_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Handle the user's text or forwarded message during AWAITING_ADD."""
     msg = update.message
     if msg is None or update.effective_user is None:
@@ -184,7 +202,9 @@ async def forward_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE
     await db.add_forward_origin_allowlist(
         user_id=user_id, origin_chat_id=channel_id, origin_channel_name=channel_name
     )
-    logger.info("User %s added forward origin %s (%s)", user_id, channel_id, channel_name)
+    logger.info(
+        "User %s added forward origin %s (%s)", user_id, channel_id, channel_name
+    )
 
     text, keyboard = await _list_text_and_keyboard(user_id)
     fw_msg_id = context.user_data.get("fw_msg_id")

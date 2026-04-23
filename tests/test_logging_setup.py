@@ -111,9 +111,7 @@ def test_extra_path_falls_back_to_str() -> None:
 
 
 def test_extra_nested_dict_recurses() -> None:
-    record = _make_record(
-        extra={"meta": {"schedule_id": 3, "labels": ["a", "b"]}}
-    )
+    record = _make_record(extra={"meta": {"schedule_id": 3, "labels": ["a", "b"]}})
     payload = _format(record)
     assert payload["meta"] == {"schedule_id": 3, "labels": ["a", "b"]}
 

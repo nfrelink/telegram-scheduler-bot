@@ -5,7 +5,9 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_init_database_migrates_legacy_users_table_without_data_loss(db_env) -> None:
+async def test_init_database_migrates_legacy_users_table_without_data_loss(
+    db_env,
+) -> None:
     """Simulate an older DB missing users.timezone and ensure init_database upgrades it."""
     # Create a minimal legacy schema: users table without timezone column.
     async with aiosqlite.connect(db_env) as conn:
@@ -39,7 +41,9 @@ async def test_init_database_migrates_legacy_users_table_without_data_loss(db_en
         cols = [r[1] for r in await cur.fetchall()]
         assert "timezone" in cols
 
-        cur2 = await conn.execute("SELECT id, username, timezone FROM users WHERE id = 123")
+        cur2 = await conn.execute(
+            "SELECT id, username, timezone FROM users WHERE id = 123"
+        )
         row = await cur2.fetchone()
         assert row is not None
         assert int(row["id"]) == 123
@@ -48,7 +52,9 @@ async def test_init_database_migrates_legacy_users_table_without_data_loss(db_en
 
 
 @pytest.mark.asyncio
-async def test_init_database_creates_media_fingerprints_and_duplicate_columns(db_env) -> None:
+async def test_init_database_creates_media_fingerprints_and_duplicate_columns(
+    db_env,
+) -> None:
     """Ensure the media_fingerprints table and duplicate detection columns exist after init."""
     from database import init_database
 
@@ -60,8 +66,17 @@ async def test_init_database_creates_media_fingerprints_and_duplicate_columns(db
         # media_fingerprints table exists
         cur = await conn.execute("PRAGMA table_info(media_fingerprints)")
         fp_cols = {r[1] for r in await cur.fetchall()}
-        for expected in ("id", "channel_id", "file_unique_id", "dhash", "file_id", "media_type",
-                         "queued_post_id", "posted_at", "created_at"):
+        for expected in (
+            "id",
+            "channel_id",
+            "file_unique_id",
+            "dhash",
+            "file_id",
+            "media_type",
+            "queued_post_id",
+            "posted_at",
+            "created_at",
+        ):
             assert expected in fp_cols, f"Missing column: {expected}"
 
         # channels.duplicate_detection_enabled
@@ -76,7 +91,9 @@ async def test_init_database_creates_media_fingerprints_and_duplicate_columns(db
 
 
 @pytest.mark.asyncio
-async def test_init_database_migrates_legacy_schedules_to_next_planned_run_at(db_env) -> None:
+async def test_init_database_migrates_legacy_schedules_to_next_planned_run_at(
+    db_env,
+) -> None:
     """Simulate a pre-Phase-1.1 schedules table missing next_planned_run_at.
 
     Regression test: SCHEMA_SQL must not reference next_planned_run_at in any
@@ -195,4 +212,3 @@ async def test_migration_adds_duplicate_columns_to_existing_schema(db_env) -> No
         cur = await conn.execute("PRAGMA table_info(users)")
         u_cols = {r[1] for r in await cur.fetchall()}
         assert "duplicate_alerts_enabled" in u_cols
-

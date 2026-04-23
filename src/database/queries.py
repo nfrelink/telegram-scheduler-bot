@@ -50,7 +50,9 @@ async def upsert_user(
         row = await cursor.fetchone()
         user = _row_to_dict(row)
         if user is None:
-            raise RuntimeError(f"upsert_user: SELECT after UPSERT returned no row for user_id={user_id}")
+            raise RuntimeError(
+                f"upsert_user: SELECT after UPSERT returned no row for user_id={user_id}"
+            )
         return user
 
 
@@ -191,7 +193,9 @@ async def set_user_context(
 
 async def clear_user_context(user_id: int) -> None:
     """Clear current channel/schedule selection for a user."""
-    await set_user_context(user_id=user_id, selected_channel_id=None, selected_schedule_id=None)
+    await set_user_context(
+        user_id=user_id, selected_channel_id=None, selected_schedule_id=None
+    )
 
 
 # --- Forwarding allowlist ----------------------------------------------------
@@ -213,7 +217,9 @@ async def get_forward_origin_allowlist(user_id: int) -> list[int]:
         return [int(r[0]) for r in rows]  # type: ignore[index]
 
 
-async def get_forward_origin_allowlist_with_names(user_id: int) -> list[tuple[int, str | None]]:
+async def get_forward_origin_allowlist_with_names(
+    user_id: int,
+) -> list[tuple[int, str | None]]:
     """Get origin chat IDs with their stored channel names for display."""
     async with get_db() as db:
         cursor = await db.execute(
@@ -257,7 +263,9 @@ async def remove_forward_origin_allowlist(*, user_id: int, origin_chat_id: int) 
 async def clear_forward_origin_allowlist(user_id: int) -> None:
     """Clear forwarding allowlist for a user."""
     async with transaction() as db:
-        await db.execute("DELETE FROM forward_origin_allowlist WHERE user_id = ?", (user_id,))
+        await db.execute(
+            "DELETE FROM forward_origin_allowlist WHERE user_id = ?", (user_id,)
+        )
 
 
 # --- Channels ---------------------------------------------------------------
@@ -315,7 +323,9 @@ async def get_channel_by_telegram_id(telegram_channel_id: str) -> dict[str, Any]
 async def get_channel_by_id(channel_db_id: int) -> dict[str, Any] | None:
     """Get channel by internal DB id (channels.id)."""
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM channels WHERE id = ?", (channel_db_id,))
+        cursor = await db.execute(
+            "SELECT * FROM channels WHERE id = ?", (channel_db_id,)
+        )
         row = await cursor.fetchone()
         return _row_to_dict(row)
 
@@ -323,10 +333,15 @@ async def get_channel_by_id(channel_db_id: int) -> dict[str, Any] | None:
 async def delete_channel(channel_db_id: int, *, user_id: int) -> None:
     """Delete channel (cascades to schedules and queued posts)."""
     async with transaction() as db:
-        await db.execute("DELETE FROM channels WHERE id = ? AND user_id = ?", (channel_db_id, user_id))
+        await db.execute(
+            "DELETE FROM channels WHERE id = ? AND user_id = ?",
+            (channel_db_id, user_id),
+        )
 
 
-async def update_channel_name(channel_db_id: int, *, channel_name: str, user_id: int) -> None:
+async def update_channel_name(
+    channel_db_id: int, *, channel_name: str, user_id: int
+) -> None:
     """Update stored channel name/title."""
     async with transaction() as db:
         await db.execute(
@@ -366,7 +381,9 @@ async def create_schedule(
 async def get_schedule(schedule_id: int) -> dict[str, Any] | None:
     """Get schedule by ID with parsed JSON pattern."""
     async with get_db() as db:
-        cursor = await db.execute("SELECT * FROM schedules WHERE id = ?", (schedule_id,))
+        cursor = await db.execute(
+            "SELECT * FROM schedules WHERE id = ?", (schedule_id,)
+        )
         row = await cursor.fetchone()
         schedule = _row_to_dict(row)
         if schedule is None:
@@ -404,7 +421,9 @@ async def get_schedule_with_channel(schedule_id: int) -> dict[str, Any] | None:
         return schedule
 
 
-async def get_schedule_for_user(user_id: int, schedule_id: int) -> dict[str, Any] | None:
+async def get_schedule_for_user(
+    user_id: int, schedule_id: int
+) -> dict[str, Any] | None:
     """Get schedule only if it is owned by user_id."""
     schedule = await get_schedule_with_channel(schedule_id)
     if schedule is None:
@@ -510,7 +529,9 @@ async def resume_schedule(schedule_id: int, *, user_id: int) -> None:
         )
 
 
-async def update_schedule_pattern(schedule_id: int, pattern: dict[str, Any], *, user_id: int) -> None:
+async def update_schedule_pattern(
+    schedule_id: int, pattern: dict[str, Any], *, user_id: int
+) -> None:
     """Update schedule pattern JSON."""
     async with transaction() as db:
         await db.execute(
@@ -534,7 +555,9 @@ async def update_schedule_name(schedule_id: int, *, name: str, user_id: int) -> 
         )
 
 
-async def update_schedule_timezone(schedule_id: int, *, timezone_name: str, user_id: int) -> None:
+async def update_schedule_timezone(
+    schedule_id: int, *, timezone_name: str, user_id: int
+) -> None:
     """Update schedule timezone (IANA name)."""
     async with transaction() as db:
         await db.execute(
@@ -597,7 +620,9 @@ async def delete_schedule(schedule_id: int, *, user_id: int) -> None:
 # --- Queue ------------------------------------------------------------------
 
 
-async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -> tuple[int, list[int]]:
+async def add_queued_posts_bulk(
+    schedule_id: int, posts: list[dict[str, Any]]
+) -> tuple[int, list[int]]:
     """Add multiple queued posts in one transaction.
 
     Args:
@@ -673,7 +698,9 @@ async def add_queued_posts_bulk(schedule_id: int, posts: list[dict[str, Any]]) -
     return len(posts), inserted_ids
 
 
-async def get_next_queued_post(schedule_id: int, *, now: datetime) -> dict[str, Any] | None:
+async def get_next_queued_post(
+    schedule_id: int, *, now: datetime
+) -> dict[str, Any] | None:
     """Get the next post to send for a schedule.
 
     Two-tier priority:
@@ -703,7 +730,9 @@ async def get_next_queued_post(schedule_id: int, *, now: datetime) -> dict[str, 
         return _row_to_dict(row)
 
 
-async def get_queued_posts(schedule_id: int, *, limit: int = 10, offset: int = 0) -> list[dict[str, Any]]:
+async def get_queued_posts(
+    schedule_id: int, *, limit: int = 10, offset: int = 0
+) -> list[dict[str, Any]]:
     """Get posts from queue in FIFO order."""
     async with get_db() as db:
         cursor = await db.execute(
@@ -760,7 +789,9 @@ async def get_latest_active_schedule_run_at() -> datetime | None:
         return parse_timestamp(row["latest"])
 
 
-async def get_queued_posts_unscheduled(schedule_id: int, *, limit: int) -> list[dict[str, Any]]:
+async def get_queued_posts_unscheduled(
+    schedule_id: int, *, limit: int
+) -> list[dict[str, Any]]:
     """Get queued posts that do not have scheduled_for set, in FIFO order.
 
     Excludes pinned posts (pinned_at IS NOT NULL) since they manage their own
@@ -800,7 +831,9 @@ async def get_channel_queue_count(channel_db_id: int) -> int:
 async def get_queue_count(schedule_id: int) -> int:
     """Count posts in a schedule queue."""
     async with get_db() as db:
-        cursor = await db.execute("SELECT COUNT(*) FROM queued_posts WHERE schedule_id = ?", (schedule_id,))
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM queued_posts WHERE schedule_id = ?", (schedule_id,)
+        )
         row = await cursor.fetchone()
         return int(row[0])  # type: ignore[index]
 
@@ -863,7 +896,9 @@ async def get_queued_post_with_owner(post_id: int) -> dict[str, Any] | None:
         return _row_to_dict(row)
 
 
-async def bulk_update_posts_scheduled_for(post_updates: list[tuple[int, datetime]]) -> None:
+async def bulk_update_posts_scheduled_for(
+    post_updates: list[tuple[int, datetime]],
+) -> None:
     """Set scheduled_for for multiple posts in one transaction.
 
     Args:
@@ -872,7 +907,10 @@ async def bulk_update_posts_scheduled_for(post_updates: list[tuple[int, datetime
     if not post_updates:
         return
 
-    params = [(to_sqlite_timestamp(scheduled_for), post_id) for (post_id, scheduled_for) in post_updates]
+    params = [
+        (to_sqlite_timestamp(scheduled_for), post_id)
+        for (post_id, scheduled_for) in post_updates
+    ]
     async with transaction() as db:
         await db.executemany(
             "UPDATE queued_posts SET scheduled_for = ? WHERE id = ?",
@@ -890,7 +928,9 @@ async def _update_post_retry_in_tx(
     )
 
 
-async def update_post_retry(post_id: int, *, retry_count: int, scheduled_for: datetime) -> None:
+async def update_post_retry(
+    post_id: int, *, retry_count: int, scheduled_for: datetime
+) -> None:
     """Update retry count and next attempt time."""
     async with transaction() as db:
         await _update_post_retry_in_tx(
@@ -918,7 +958,9 @@ async def get_earliest_pinned_at() -> Any:
         return row[0] if row else None  # type: ignore[index]
 
 
-async def set_post_pinned_at(post_id: int, pinned_at: datetime, *, user_id: int) -> None:
+async def set_post_pinned_at(
+    post_id: int, pinned_at: datetime, *, user_id: int
+) -> None:
     """Pin a queued post to a specific send datetime."""
     async with transaction() as db:
         await db.execute(
@@ -998,14 +1040,18 @@ async def verify_code(*, code: str, telegram_channel_id: str) -> int | None:
             return None
 
         user_id = int(row[0])  # type: ignore[index]
-        await db.execute("UPDATE verification_codes SET used = TRUE WHERE code = ?", (code,))
+        await db.execute(
+            "UPDATE verification_codes SET used = TRUE WHERE code = ?", (code,)
+        )
         return user_id
 
 
 async def cleanup_expired_codes() -> None:
     """Delete expired verification codes."""
     async with transaction() as db:
-        await db.execute("DELETE FROM verification_codes WHERE expires_at < CURRENT_TIMESTAMP")
+        await db.execute(
+            "DELETE FROM verification_codes WHERE expires_at < CURRENT_TIMESTAMP"
+        )
 
 
 # --- Admin / stats ----------------------------------------------------------
@@ -1019,16 +1065,22 @@ async def get_system_stats() -> dict[str, int]:
         cursor = await db.execute("SELECT COUNT(*) FROM users")
         stats["total_users"] = int((await cursor.fetchone())[0])  # type: ignore[index]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM channels WHERE is_active = TRUE")
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM channels WHERE is_active = TRUE"
+        )
         stats["total_channels"] = int((await cursor.fetchone())[0])  # type: ignore[index]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM schedules WHERE state = 'active'")
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM schedules WHERE state = 'active'"
+        )
         stats["active_schedules"] = int((await cursor.fetchone())[0])  # type: ignore[index]
 
         cursor = await db.execute("SELECT COUNT(*) FROM queued_posts")
         stats["queued_posts"] = int((await cursor.fetchone())[0])  # type: ignore[index]
 
-        cursor = await db.execute("SELECT COUNT(*) FROM queued_posts WHERE retry_count > 0")
+        cursor = await db.execute(
+            "SELECT COUNT(*) FROM queued_posts WHERE retry_count > 0"
+        )
         stats["failed_posts"] = int((await cursor.fetchone())[0])  # type: ignore[index]
 
         return stats
@@ -1037,7 +1089,9 @@ async def get_system_stats() -> dict[str, int]:
 async def get_schedule_state_counts() -> dict[str, int]:
     """Count schedules by state."""
     async with get_db() as db:
-        cursor = await db.execute("SELECT state, COUNT(*) FROM schedules GROUP BY state")
+        cursor = await db.execute(
+            "SELECT state, COUNT(*) FROM schedules GROUP BY state"
+        )
         rows = await cursor.fetchall()
         out: dict[str, int] = {"active": 0, "paused": 0, "empty_paused": 0}
         for r in rows:
@@ -1130,7 +1184,13 @@ async def create_bulk_session(
                 (user_id, schedule_id, caption_mode, single_caption, single_caption_entities)
             VALUES (?, ?, ?, ?, ?)
             """,
-            (user_id, schedule_id, caption_mode, single_caption, single_caption_entities),
+            (
+                user_id,
+                schedule_id,
+                caption_mode,
+                single_caption,
+                single_caption_entities,
+            ),
         )
 
 
@@ -1195,11 +1255,20 @@ async def add_staging_item(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                user_id, media_type, file_id, caption, caption_entities,
-                media_group_id, forward_from_chat_id, forward_from_message_id,
-                forward_origin_chat_id, forward_origin_message_id,
-                raw_origin_chat_id, raw_origin_message_id,
-                raw_origin_is_forwarded, pos,
+                user_id,
+                media_type,
+                file_id,
+                caption,
+                caption_entities,
+                media_group_id,
+                forward_from_chat_id,
+                forward_from_message_id,
+                forward_origin_chat_id,
+                forward_origin_message_id,
+                raw_origin_chat_id,
+                raw_origin_message_id,
+                raw_origin_is_forwarded,
+                pos,
             ),
         )
 
@@ -1228,7 +1297,9 @@ async def clear_staging(user_id: int) -> None:
     """Delete all staging items and the session for a user."""
     async with transaction() as db:
         await db.execute("DELETE FROM bulk_staging WHERE user_id = ?", (user_id,))
-        await db.execute("DELETE FROM bulk_upload_session WHERE user_id = ?", (user_id,))
+        await db.execute(
+            "DELETE FROM bulk_upload_session WHERE user_id = ?", (user_id,)
+        )
 
 
 # --- Media fingerprints (duplicate detection) -----------------------------
@@ -1414,14 +1485,18 @@ async def remove_staging_items_by_file_id(user_id: int, file_id: str) -> None:
 # --- Ownership-checked channel lookups ------------------------------------
 
 
-async def get_channel_by_telegram_id_for_user(user_id: int, telegram_channel_id: str) -> dict[str, Any] | None:
+async def get_channel_by_telegram_id_for_user(
+    user_id: int, telegram_channel_id: str
+) -> dict[str, Any] | None:
     channel = await get_channel_by_telegram_id(telegram_channel_id)
     if channel is None or int(channel["user_id"]) != int(user_id):
         return None
     return channel
 
 
-async def get_channel_by_id_for_user(user_id: int, channel_db_id: int) -> dict[str, Any] | None:
+async def get_channel_by_id_for_user(
+    user_id: int, channel_db_id: int
+) -> dict[str, Any] | None:
     channel = await get_channel_by_id(channel_db_id)
     if channel is None or int(channel["user_id"]) != int(user_id):
         return None

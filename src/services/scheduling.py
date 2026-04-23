@@ -61,6 +61,7 @@ _ACTIVE_STATES: frozenset[str] = frozenset({"active"})
 # Pure helper (no DB)
 # ---------------------------------------------------------------------------
 
+
 def next_planned_for(schedule: dict[str, Any], *, after: datetime) -> datetime | None:
     """Return the next planned fire time for `schedule`, or None.
 
@@ -84,6 +85,7 @@ def next_planned_for(schedule: dict[str, Any], *, after: datetime) -> datetime |
 # ---------------------------------------------------------------------------
 # Recompute (idempotent; caller-safe)
 # ---------------------------------------------------------------------------
+
 
 async def recompute_next_run(
     schedule_id: int, *, now: datetime | None = None
@@ -118,6 +120,7 @@ async def persist_next_run(schedule_id: int, value: datetime | None) -> None:
 # ---------------------------------------------------------------------------
 # Lifecycle commands (state transitions + content edits)
 # ---------------------------------------------------------------------------
+
 
 async def create(
     *,

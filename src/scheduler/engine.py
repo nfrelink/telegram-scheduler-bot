@@ -158,14 +158,18 @@ async def _catch_up_missed_posts() -> None:
             if missed <= 0:
                 continue
 
-            candidates = await db.get_queued_posts_unscheduled(schedule_id, limit=missed)
+            candidates = await db.get_queued_posts_unscheduled(
+                schedule_id, limit=missed
+            )
             if not candidates:
                 continue
 
             updates: list[tuple[int, datetime]] = []
             for i, post in enumerate(candidates[:missed]):
                 post_id = int(post["id"])
-                updates.append((post_id, now + timedelta(seconds=CATCHUP_SPACING_SECONDS * i)))
+                updates.append(
+                    (post_id, now + timedelta(seconds=CATCHUP_SPACING_SECONDS * i))
+                )
 
             await posting.bulk_set_scheduled_for(updates)
             total_scheduled += len(updates)
@@ -374,7 +378,9 @@ async def _process_schedule(
             return
 
     await rate_limiter.wait_if_needed(telegram_channel_id)
-    ok, error_text = await send_post(bot, telegram_channel_id=telegram_channel_id, post=post)
+    ok, error_text = await send_post(
+        bot, telegram_channel_id=telegram_channel_id, post=post
+    )
 
     if ok:
         # Compute the next planned slot from `now`, not from the slot we just
@@ -414,13 +420,17 @@ async def _process_schedule(
     )
 
 
-async def _handle_empty_queue(bot: ExtBot, *, schedule: dict[str, Any], owner_user_id: int) -> None:
+async def _handle_empty_queue(
+    bot: ExtBot, *, schedule: dict[str, Any], owner_user_id: int
+) -> None:
     schedule_id = int(schedule["id"])
 
     # Avoid spamming: transition to empty_paused.
     await scheduling.mark_empty(schedule_id, user_id=owner_user_id)
 
-    channel_name = schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
+    channel_name = (
+        schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
+    )
     schedule_name = schedule.get("name") or f"Schedule {schedule_id}"
 
     await _notify_user(
@@ -454,7 +464,7 @@ async def _handle_post_failure(
     retry_count = int(post.get("retry_count") or 0) + 1
 
     if retry_count <= MAX_RETRIES:
-        delay_minutes = 2 ** retry_count  # 2, 4, 8
+        delay_minutes = 2**retry_count  # 2, 4, 8
         retry_time = now + timedelta(minutes=delay_minutes)
         await posting.complete_retry(
             post_id=post_id,
@@ -557,4 +567,3 @@ async def _notify_user(bot: ExtBot, user_id: int, message: str, entities) -> Non
             exc_info=True,
             extra={"event": "user_notify_failed", "user_id": user_id},
         )
-

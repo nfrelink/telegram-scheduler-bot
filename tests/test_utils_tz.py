@@ -15,6 +15,7 @@ from utils.tz import (
 # is_valid_timezone
 # ---------------------------------------------------------------------------
 
+
 def test_is_valid_timezone_accepts_utc_case_insensitively() -> None:
     for tz in ("UTC", "utc", "Utc", "Etc/UTC", "etc/utc"):
         assert is_valid_timezone(tz)
@@ -33,6 +34,7 @@ def test_is_valid_timezone_rejects_nonsense_and_typos() -> None:
 # ---------------------------------------------------------------------------
 # suggest_timezones
 # ---------------------------------------------------------------------------
+
 
 def test_suggest_timezones_finds_typo_correction() -> None:
     """Close typos of real names should produce the real name as a
@@ -67,6 +69,7 @@ def test_suggest_timezones_zero_or_empty_short_circuit() -> None:
 # InvalidTimezoneError
 # ---------------------------------------------------------------------------
 
+
 def test_invalid_timezone_error_message_includes_suggestions() -> None:
     err = InvalidTimezoneError(
         "Europe/Amsterdamm", suggestions=["Europe/Amsterdam", "Europe/Bucharest"]
@@ -96,6 +99,7 @@ def test_invalid_timezone_error_is_a_value_error() -> None:
 # ---------------------------------------------------------------------------
 # default_timezone_name — env handling
 # ---------------------------------------------------------------------------
+
 
 def test_default_timezone_name_falls_back_when_env_unset(monkeypatch) -> None:
     monkeypatch.delenv("DEFAULT_TIMEZONE", raising=False)

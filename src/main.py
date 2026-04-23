@@ -16,7 +16,9 @@ from typing import Final
 # (transitively pulled in via `from bot import ...`); otherwise the
 # per_message=False UserWarning fires at import time before the filter is
 # active. The deferred imports below are intentional — do not reorder.
-warnings.filterwarnings("ignore", message=r".*per_message=False.*", category=UserWarning)
+warnings.filterwarnings(
+    "ignore", message=r".*per_message=False.*", category=UserWarning
+)
 
 from dotenv import load_dotenv  # noqa: E402
 
@@ -90,4 +92,3 @@ if __name__ == "__main__":
         # Basic last-resort logging; logging may not be configured yet.
         print(f"Fatal error: {e}", file=sys.stderr)
         raise
-

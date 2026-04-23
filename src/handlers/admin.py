@@ -19,7 +19,9 @@ from utils.tg_text import utf16_len
 logger = logging.getLogger(__name__)
 
 
-def _extract_command_payload(message: Message) -> tuple[str | None, list[MessageEntity] | None]:
+def _extract_command_payload(
+    message: Message,
+) -> tuple[str | None, list[MessageEntity] | None]:
     """Extract payload text/entities for '/broadcast <message>'."""
     text = message.text or ""
     if not text.strip():
@@ -45,7 +47,7 @@ def _extract_command_payload(message: Message) -> tuple[str | None, list[Message
     prefix_utf16 = utf16_len(prefix_text)
 
     entities: list[MessageEntity] = []
-    for ent in (message.entities or []):
+    for ent in message.entities or []:
         ent_end = ent.offset + ent.length
         if ent_end <= prefix_utf16:
             continue
@@ -103,8 +105,13 @@ def admin_only(func):  # type: ignore[no-untyped-def]
         if update.message is None:
             return
         if not _is_admin(update):
-            await update.message.reply_text("This command is restricted to the bot administrator.")
-            logger.warning("Unauthorized admin command attempt by user_id=%s", update.effective_user.id if update.effective_user else None)
+            await update.message.reply_text(
+                "This command is restricted to the bot administrator."
+            )
+            logger.warning(
+                "Unauthorized admin command attempt by user_id=%s",
+                update.effective_user.id if update.effective_user else None,
+            )
             return
         return await func(update, context)
 
@@ -211,8 +218,11 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             ok += 1
         except Exception as e:
             failed += 1
-            logger.error("Broadcast failed for user_id=%s: %s", user_id, e, exc_info=True)
+            logger.error(
+                "Broadcast failed for user_id=%s: %s", user_id, e, exc_info=True
+            )
         await asyncio.sleep(0.1)
 
-    await update.message.reply_text(f"Broadcast complete. Success: {ok}. Failed: {failed}.")
-
+    await update.message.reply_text(
+        f"Broadcast complete. Success: {ok}. Failed: {failed}."
+    )

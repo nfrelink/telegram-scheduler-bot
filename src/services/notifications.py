@@ -40,6 +40,7 @@ _LAST_SENT_AT: dict[str, float] = {}
 # Env lookups
 # ---------------------------------------------------------------------------
 
+
 def _get_admin_user_id() -> int | None:
     raw = os.getenv("ADMIN_USER_ID")
     if not raw:
@@ -67,6 +68,7 @@ def _get_debounce_seconds() -> int:
 # ---------------------------------------------------------------------------
 # Debounce
 # ---------------------------------------------------------------------------
+
 
 def _should_send(key: str) -> bool:
     """Decide whether to send for `key` now, recording the send if yes.
@@ -96,6 +98,7 @@ def reset_debounce_state() -> None:
 # Formatting
 # ---------------------------------------------------------------------------
 
+
 def format_message(event: str, lines: Sequence[tuple[str, object]]) -> str:
     """Render an admin DM body from `(label, value)` pairs.
 
@@ -122,6 +125,7 @@ def format_message(event: str, lines: Sequence[tuple[str, object]]) -> str:
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 async def notify_admin(
     bot: ExtBot,

@@ -1,4 +1,5 @@
 """Tests for previously uncovered database query functions."""
+
 from __future__ import annotations
 
 import pytest
@@ -8,7 +9,9 @@ from database import queries as db
 
 async def _make_schedule(user_id: int, *, suffix: str = "") -> tuple[dict, dict, dict]:
     """Helper: create user + channel + schedule, return all three."""
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     channel = await db.create_channel(
         user_id=user_id,
         telegram_channel_id=f"-100{user_id}{suffix}",
@@ -28,17 +31,22 @@ async def _make_schedule(user_id: int, *, suffix: str = "") -> tuple[dict, dict,
 # get_user_timezone / set_user_timezone
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_user_timezone_returns_none_when_not_set(initialized_db) -> None:
     user_id = 8001
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     assert await db.get_user_timezone(user_id) is None
 
 
 @pytest.mark.asyncio
 async def test_set_and_get_user_timezone_roundtrip(initialized_db) -> None:
     user_id = 8002
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
 
     await db.set_user_timezone(user_id, "Asia/Tokyo")
     assert await db.get_user_timezone(user_id) == "Asia/Tokyo"
@@ -50,7 +58,9 @@ async def test_set_and_get_user_timezone_roundtrip(initialized_db) -> None:
 @pytest.mark.asyncio
 async def test_set_user_timezone_none_clears_value(initialized_db) -> None:
     user_id = 8003
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     await db.set_user_timezone(user_id, "UTC")
     assert await db.get_user_timezone(user_id) == "UTC"
 
@@ -62,12 +72,19 @@ async def test_set_user_timezone_none_clears_value(initialized_db) -> None:
 # get_user_channels
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_user_channels_returns_all_channels_for_user(initialized_db) -> None:
     user_id = 8004
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
-    ch1 = await db.create_channel(user_id=user_id, telegram_channel_id="-80041", channel_name="Channel A")
-    ch2 = await db.create_channel(user_id=user_id, telegram_channel_id="-80042", channel_name="Channel B")
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    ch1 = await db.create_channel(
+        user_id=user_id, telegram_channel_id="-80041", channel_name="Channel A"
+    )
+    ch2 = await db.create_channel(
+        user_id=user_id, telegram_channel_id="-80042", channel_name="Channel B"
+    )
 
     channels = await db.get_user_channels(user_id)
     ids = {int(ch["id"]) for ch in channels}
@@ -78,10 +95,18 @@ async def test_get_user_channels_returns_all_channels_for_user(initialized_db) -
 
 @pytest.mark.asyncio
 async def test_get_user_channels_only_returns_own_channels(initialized_db) -> None:
-    await db.upsert_user(user_id=8005, username="u", first_name="f", last_name="l", is_admin=False)
-    await db.upsert_user(user_id=8006, username="u", first_name="f", last_name="l", is_admin=False)
-    await db.create_channel(user_id=8005, telegram_channel_id="-80051", channel_name="User A channel")
-    await db.create_channel(user_id=8006, telegram_channel_id="-80061", channel_name="User B channel")
+    await db.upsert_user(
+        user_id=8005, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    await db.upsert_user(
+        user_id=8006, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    await db.create_channel(
+        user_id=8005, telegram_channel_id="-80051", channel_name="User A channel"
+    )
+    await db.create_channel(
+        user_id=8006, telegram_channel_id="-80061", channel_name="User B channel"
+    )
 
     channels_a = await db.get_user_channels(8005)
     assert all(int(ch["user_id"]) == 8005 for ch in channels_a)
@@ -92,11 +117,16 @@ async def test_get_user_channels_only_returns_own_channels(initialized_db) -> No
 # get_channel_by_id
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_channel_by_id_returns_correct_data(initialized_db) -> None:
     user_id = 8007
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
-    ch = await db.create_channel(user_id=user_id, telegram_channel_id="-8007", channel_name="Named Channel")
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    ch = await db.create_channel(
+        user_id=user_id, telegram_channel_id="-8007", channel_name="Named Channel"
+    )
 
     fetched = await db.get_channel_by_id(int(ch["id"]))
     assert fetched is not None
@@ -111,6 +141,7 @@ async def test_get_channel_by_id_returns_none_for_missing_id(initialized_db) -> 
 # ---------------------------------------------------------------------------
 # get_queue_count / get_channel_queue_count
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_get_queue_count_starts_at_zero(initialized_db) -> None:
@@ -127,31 +158,54 @@ async def test_get_queue_count_reflects_bulk_insert(initialized_db) -> None:
 
     await db.add_queued_posts_bulk(
         schedule_id,
-        [{"media_type": "photo", "file_id": "a"}, {"media_type": "photo", "file_id": "b"}],
+        [
+            {"media_type": "photo", "file_id": "a"},
+            {"media_type": "photo", "file_id": "b"},
+        ],
     )
     assert await db.get_queue_count(schedule_id) == 2
 
 
 @pytest.mark.asyncio
-async def test_get_channel_queue_count_aggregates_across_schedules(initialized_db) -> None:
+async def test_get_channel_queue_count_aggregates_across_schedules(
+    initialized_db,
+) -> None:
     user_id = 8010
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
-    ch = await db.create_channel(user_id=user_id, telegram_channel_id="-8010", channel_name="C")
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    ch = await db.create_channel(
+        user_id=user_id, telegram_channel_id="-8010", channel_name="C"
+    )
     channel_id = int(ch["id"])
 
     s1 = await db.create_schedule(
-        channel_db_id=channel_id, name="S1",
-        pattern={"type": "interval", "hours": 1}, timezone_name="UTC", state="paused",
+        channel_db_id=channel_id,
+        name="S1",
+        pattern={"type": "interval", "hours": 1},
+        timezone_name="UTC",
+        state="paused",
     )
     s2 = await db.create_schedule(
-        channel_db_id=channel_id, name="S2",
-        pattern={"type": "interval", "hours": 2}, timezone_name="UTC", state="paused",
+        channel_db_id=channel_id,
+        name="S2",
+        pattern={"type": "interval", "hours": 2},
+        timezone_name="UTC",
+        state="paused",
     )
 
     assert await db.get_channel_queue_count(channel_id) == 0
 
-    await db.add_queued_posts_bulk(int(s1["id"]), [{"media_type": "photo", "file_id": "x"}])
-    await db.add_queued_posts_bulk(int(s2["id"]), [{"media_type": "photo", "file_id": "y"}, {"media_type": "photo", "file_id": "z"}])
+    await db.add_queued_posts_bulk(
+        int(s1["id"]), [{"media_type": "photo", "file_id": "x"}]
+    )
+    await db.add_queued_posts_bulk(
+        int(s2["id"]),
+        [
+            {"media_type": "photo", "file_id": "y"},
+            {"media_type": "photo", "file_id": "z"},
+        ],
+    )
 
     assert await db.get_channel_queue_count(channel_id) == 3
 
@@ -160,11 +214,14 @@ async def test_get_channel_queue_count_aggregates_across_schedules(initialized_d
 # get_queued_post_with_owner
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_queued_post_with_owner_returns_correct_owner(initialized_db) -> None:
     user_id = 8011
     ch, schedule, _ = await _make_schedule(user_id)
-    await db.add_queued_posts_bulk(int(schedule["id"]), [{"media_type": "photo", "file_id": "z"}])
+    await db.add_queued_posts_bulk(
+        int(schedule["id"]), [{"media_type": "photo", "file_id": "z"}]
+    )
 
     posts = await db.get_queued_posts(int(schedule["id"]), limit=1)
     post_id = int(posts[0]["id"])
@@ -175,7 +232,9 @@ async def test_get_queued_post_with_owner_returns_correct_owner(initialized_db) 
 
 
 @pytest.mark.asyncio
-async def test_get_queued_post_with_owner_returns_none_for_missing_id(initialized_db) -> None:
+async def test_get_queued_post_with_owner_returns_none_for_missing_id(
+    initialized_db,
+) -> None:
     assert await db.get_queued_post_with_owner(99999999) is None
 
 
@@ -183,11 +242,16 @@ async def test_get_queued_post_with_owner_returns_none_for_missing_id(initialize
 # get_schedule_with_channel
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_schedule_with_channel_returns_joined_data(initialized_db) -> None:
     user_id = 8012
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
-    ch = await db.create_channel(user_id=user_id, telegram_channel_id="-8012", channel_name="Chan 8012")
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    ch = await db.create_channel(
+        user_id=user_id, telegram_channel_id="-8012", channel_name="Chan 8012"
+    )
     schedule = await db.create_schedule(
         channel_db_id=int(ch["id"]),
         name="Sched 8012",
@@ -205,13 +269,16 @@ async def test_get_schedule_with_channel_returns_joined_data(initialized_db) -> 
 
 
 @pytest.mark.asyncio
-async def test_get_schedule_with_channel_returns_none_for_missing_id(initialized_db) -> None:
+async def test_get_schedule_with_channel_returns_none_for_missing_id(
+    initialized_db,
+) -> None:
     assert await db.get_schedule_with_channel(99999999) is None
 
 
 # ---------------------------------------------------------------------------
 # delete_schedule
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_delete_schedule_removes_it_from_db(initialized_db) -> None:

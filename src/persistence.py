@@ -143,7 +143,9 @@ class _AtomicPicklePersistence(PicklePersistence):
         # collide on rename rather than on the temp file itself.
         from telegram.ext._picklepersistence import _BotPickler  # noqa: PLC0415
 
-        tmp_path = self.filepath.with_suffix(self.filepath.suffix + f".{os.getpid()}.tmp")
+        tmp_path = self.filepath.with_suffix(
+            self.filepath.suffix + f".{os.getpid()}.tmp"
+        )
         try:
             with tmp_path.open("wb") as file:
                 _BotPickler(self.bot, file, protocol=pickle.HIGHEST_PROTOCOL).dump(data)
@@ -223,7 +225,10 @@ class _NoopPersistence(BasePersistence):
         return {}
 
     async def update_conversation(
-        self, name: str, key: ConversationKey, new_state: Optional[object]  # noqa: ARG002
+        self,
+        name: str,
+        key: ConversationKey,
+        new_state: Optional[object],  # noqa: ARG002
     ) -> None:
         return None
 

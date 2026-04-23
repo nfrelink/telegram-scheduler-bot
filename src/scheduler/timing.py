@@ -52,8 +52,7 @@ def _get_timezone(tz_name: str | None) -> tzinfo:
         return timezone.utc
     except Exception:
         logger.error(
-            "Unknown timezone %r (write-time validation bypassed); "
-            "falling back to UTC",
+            "Unknown timezone %r (write-time validation bypassed); falling back to UTC",
             tz_name,
         )
         return timezone.utc
@@ -87,7 +86,10 @@ def validate_schedule_pattern(pattern: dict) -> tuple[bool, str]:
         hours = int(pattern.get("hours", 0) or 0)
         minutes = int(pattern.get("minutes", 0) or 0)
         if hours <= 0 and minutes <= 0:
-            return False, "Interval schedule must include hours and/or minutes greater than 0."
+            return (
+                False,
+                "Interval schedule must include hours and/or minutes greater than 0.",
+            )
         return True, "OK"
 
     if schedule_type == "daily":
@@ -105,7 +107,9 @@ def validate_schedule_pattern(pattern: dict) -> tuple[bool, str]:
             return False, "Weekly schedule must include a non-empty list of days."
         if not isinstance(times, list) or not times:
             return False, "Weekly schedule must include a non-empty list of times."
-        if not all(isinstance(d, str) and d.lower() in WEEKDAY_NAME_TO_INT for d in days):
+        if not all(
+            isinstance(d, str) and d.lower() in WEEKDAY_NAME_TO_INT for d in days
+        ):
             return False, "Weekly days must be weekday names (e.g., monday, tuesday)."
         if not all(isinstance(t, str) and parse_time_string(t) for t in times):
             return False, "Weekly times must be in HH:MM format."
@@ -147,7 +151,9 @@ def calculate_next_run(
             hours = int(pattern.get("hours", 0) or 0)
             minutes = int(pattern.get("minutes", 0) or 0)
             delta = timedelta(hours=hours, minutes=minutes)
-            if delta.total_seconds() <= 0:  # pragma: no cover  # guarded upstream by validate_schedule_pattern
+            if (
+                delta.total_seconds() <= 0
+            ):  # pragma: no cover  # guarded upstream by validate_schedule_pattern
                 raise ValueError("Interval must be greater than 0.")
             return after_utc + delta
 
@@ -155,28 +161,38 @@ def calculate_next_run(
             return _next_daily_occurrence(after_utc, pattern["times"], tz)
 
         case "weekly":
-            return _next_weekly_occurrence(after_utc, pattern["days"], pattern["times"], tz)
+            return _next_weekly_occurrence(
+                after_utc, pattern["days"], pattern["times"], tz
+            )
 
         case _:  # pragma: no cover  # guarded upstream by validate_schedule_pattern
             raise ValueError("Unknown schedule type.")
 
 
-def _next_daily_occurrence(after_utc: datetime, times: list[str], tz: tzinfo) -> datetime:
+def _next_daily_occurrence(
+    after_utc: datetime, times: list[str], tz: tzinfo
+) -> datetime:
     after_local = after_utc.astimezone(tz)
     parsed_times = sorted({parse_time_string(t) for t in times if parse_time_string(t)})
-    if not parsed_times:  # pragma: no cover  # guarded upstream by validate_schedule_pattern
+    if (
+        not parsed_times
+    ):  # pragma: no cover  # guarded upstream by validate_schedule_pattern
         raise ValueError("Daily schedule has no valid times.")
 
     # Check remaining times today.
     for hour, minute in parsed_times:
-        candidate_local = after_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        candidate_local = after_local.replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
         if candidate_local > after_local:
             return candidate_local.astimezone(timezone.utc)
 
     # Otherwise, earliest time tomorrow.
     next_day = (after_local + timedelta(days=1)).date()
     hour, minute = parsed_times[0]
-    candidate_local = datetime(next_day.year, next_day.month, next_day.day, hour, minute, tzinfo=tz)
+    candidate_local = datetime(
+        next_day.year, next_day.month, next_day.day, hour, minute, tzinfo=tz
+    )
     return candidate_local.astimezone(timezone.utc)
 
 
@@ -190,7 +206,9 @@ def _next_weekly_occurrence(
     day_set = {WEEKDAY_NAME_TO_INT[d.lower()] for d in days}
 
     parsed_times = sorted({parse_time_string(t) for t in times if parse_time_string(t)})
-    if not parsed_times:  # pragma: no cover  # guarded upstream by validate_schedule_pattern
+    if (
+        not parsed_times
+    ):  # pragma: no cover  # guarded upstream by validate_schedule_pattern
         raise ValueError("Weekly schedule has no valid times.")
 
     # Search up to 14 days ahead to handle sparse weekly patterns.
@@ -211,4 +229,6 @@ def _next_weekly_occurrence(
             if candidate_local > after_local:
                 return candidate_local.astimezone(timezone.utc)
 
-    raise ValueError("Could not compute next weekly occurrence.")  # pragma: no cover  # 14-day search always finds a slot when validate_schedule_pattern accepts the input
+    raise ValueError(
+        "Could not compute next weekly occurrence."
+    )  # pragma: no cover  # 14-day search always finds a slot when validate_schedule_pattern accepts the input

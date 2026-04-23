@@ -34,6 +34,7 @@ def _reset_notifications_state() -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _mk(
     user_id: int,
     suffix: str,
@@ -109,6 +110,7 @@ async def _reload(schedule_id: int) -> dict:
 # Pattern validation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_invalid_pattern_pauses_and_notifies(initialized_db, monkeypatch) -> None:
     schedule = await _mk(8001, "001", pattern={"type": "interval", "minutes": 30})
@@ -132,7 +134,9 @@ async def test_invalid_pattern_pauses_and_notifies(initialized_db, monkeypatch) 
     )
 
     assert send_mock.await_count == 0
-    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8001]
+    user_calls = [
+        c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8001
+    ]
     assert len(user_calls) == 1
     refreshed = await _reload(int(schedule["id"]))
     assert refreshed["state"] == "paused"
@@ -142,8 +146,11 @@ async def test_invalid_pattern_pauses_and_notifies(initialized_db, monkeypatch) 
 # Empty queue
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-async def test_empty_queue_transitions_to_empty_paused(initialized_db, monkeypatch) -> None:
+async def test_empty_queue_transitions_to_empty_paused(
+    initialized_db, monkeypatch
+) -> None:
     schedule = await _mk(8002, "002")
     send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
@@ -156,7 +163,9 @@ async def test_empty_queue_transitions_to_empty_paused(initialized_db, monkeypat
     )
 
     assert send_mock.await_count == 0
-    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8002]
+    user_calls = [
+        c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8002
+    ]
     assert len(user_calls) == 1
     refreshed = await _reload(int(schedule["id"]))
     assert refreshed["state"] == "empty_paused"
@@ -166,8 +175,11 @@ async def test_empty_queue_transitions_to_empty_paused(initialized_db, monkeypat
 # Pinned post
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-async def test_pinned_post_fires_when_pinned_at_due(initialized_db, monkeypatch) -> None:
+async def test_pinned_post_fires_when_pinned_at_due(
+    initialized_db, monkeypatch
+) -> None:
     schedule = await _mk(8003, "003")
     sid = int(schedule["id"])
     await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "p1"}])
@@ -196,8 +208,11 @@ async def test_pinned_post_fires_when_pinned_at_due(initialized_db, monkeypatch)
 # scheduled_for (catch-up / retry slot)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-async def test_scheduled_for_in_future_does_not_fire(initialized_db, monkeypatch) -> None:
+async def test_scheduled_for_in_future_does_not_fire(
+    initialized_db, monkeypatch
+) -> None:
     schedule = await _mk(8004, "004")
     sid = int(schedule["id"])
     await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "p1"}])
@@ -245,6 +260,7 @@ async def test_scheduled_for_in_past_fires(initialized_db, monkeypatch) -> None:
 # ---------------------------------------------------------------------------
 # Normal FIFO timing — gated by next_planned_run_at
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_fifo_does_not_fire_when_next_planned_run_in_future(
@@ -300,12 +316,14 @@ async def test_fifo_fires_when_next_planned_run_at_now_or_past(
     npa = refreshed["next_planned_run_at"]
     assert npa is not None
     from database.time import parse_timestamp as _pt
+
     assert _pt(npa) == now + timedelta(minutes=30)
 
 
 # ---------------------------------------------------------------------------
 # Pattern-edit-then-tick must not fire a slot the new pattern places in the past
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_pattern_edit_then_tick_does_not_fire_in_past_slot(
@@ -316,7 +334,8 @@ async def test_pattern_edit_then_tick_does_not_fire_in_past_slot(
     `recompute_next_run` called on edit, NPR points to the next future slot
     so the tick is a no-op."""
     schedule = await _mk(
-        8008, "008",
+        8008,
+        "008",
         pattern={"type": "daily", "times": ["07:00", "12:30", "18:00"]},
         timezone_name="UTC",
     )
@@ -371,6 +390,7 @@ async def test_null_npr_on_active_schedule_is_backfilled(
     refreshed = await _reload(sid)
     assert refreshed["next_planned_run_at"] is not None  # backfilled
     from database.time import parse_timestamp as _pt
+
     assert _pt(refreshed["next_planned_run_at"]) == now + timedelta(minutes=30)
 
 
@@ -378,8 +398,11 @@ async def test_null_npr_on_active_schedule_is_backfilled(
 # Failure / retry handling
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-async def test_send_failure_first_retry_schedules_future_attempt(initialized_db, monkeypatch) -> None:
+async def test_send_failure_first_retry_schedules_future_attempt(
+    initialized_db, monkeypatch
+) -> None:
     schedule = await _mk(8010, "010", pattern={"type": "interval", "minutes": 30})
     sid = int(schedule["id"])
     await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "p1"}])
@@ -408,7 +431,9 @@ async def test_send_failure_first_retry_schedules_future_attempt(initialized_db,
 
 
 @pytest.mark.asyncio
-async def test_send_failure_after_max_retries_pauses_schedule(initialized_db, monkeypatch) -> None:
+async def test_send_failure_after_max_retries_pauses_schedule(
+    initialized_db, monkeypatch
+) -> None:
     schedule = await _mk(8011, "011", pattern={"type": "interval", "minutes": 30})
     sid = int(schedule["id"])
     await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "p1"}])
@@ -431,7 +456,9 @@ async def test_send_failure_after_max_retries_pauses_schedule(initialized_db, mo
     )
 
     send_mock.assert_awaited_once()
-    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8011]
+    user_calls = [
+        c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8011
+    ]
     assert len(user_calls) == 1
     refreshed = await _reload(sid)
     assert refreshed["state"] == "paused"
@@ -441,9 +468,11 @@ async def test_send_failure_after_max_retries_pauses_schedule(initialized_db, mo
 # _get_sleep_seconds — branches around earliest-pinned/scheduled lookups
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_sleep_seconds_defaults_when_no_earliest(monkeypatch) -> None:
     """No scheduled_for and no pinned_at anywhere → return the default."""
+
     async def _none(*_a, **_k):
         return None
 
@@ -457,6 +486,7 @@ async def test_get_sleep_seconds_defaults_when_no_earliest(monkeypatch) -> None:
 async def test_get_sleep_seconds_swallows_getter_exceptions(monkeypatch) -> None:
     """If a getter raises, the function treats that source as 'no earliest'.
     Ensures one flaky table doesn't crash the scheduler tick."""
+
     async def _boom(*_a, **_k):
         raise RuntimeError("db gone")
 
@@ -470,7 +500,9 @@ async def test_get_sleep_seconds_swallows_getter_exceptions(monkeypatch) -> None
 
 
 @pytest.mark.asyncio
-async def test_get_sleep_seconds_clamps_past_earliest_to_one_second(monkeypatch) -> None:
+async def test_get_sleep_seconds_clamps_past_earliest_to_one_second(
+    monkeypatch,
+) -> None:
     """If the earliest scheduled time is already in the past, sleep = 1s so we
     pick it up on the very next tick."""
     past = datetime.now(timezone.utc) - timedelta(seconds=30)
@@ -509,6 +541,7 @@ async def test_get_sleep_seconds_caps_at_default(monkeypatch) -> None:
 # _catchup_cursor — branch table for cursor selection
 # ---------------------------------------------------------------------------
 
+
 def _bare_schedule(**overrides) -> dict:
     base = {
         "id": 0,
@@ -544,7 +577,9 @@ def test_catchup_cursor_falls_back_to_created_at() -> None:
 
 
 def test_catchup_cursor_returns_none_when_no_base() -> None:
-    assert engine._catchup_cursor(_bare_schedule(), now=datetime.now(timezone.utc)) is None
+    assert (
+        engine._catchup_cursor(_bare_schedule(), now=datetime.now(timezone.utc)) is None
+    )
 
 
 def test_catchup_cursor_returns_none_on_invalid_pattern() -> None:
@@ -562,6 +597,7 @@ def test_catchup_cursor_returns_none_on_invalid_pattern() -> None:
 # _catch_up_missed_posts — backfill / cap / exception branches
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_catchup_backfills_npr_even_with_no_missed_runs(initialized_db) -> None:
     """A schedule with no missed runs (NPR ahead of now) still gets its NPR
@@ -576,6 +612,7 @@ async def test_catchup_backfills_npr_even_with_no_missed_runs(initialized_db) ->
 
     refreshed = await _reload(sid)
     from database.time import parse_timestamp as _pt
+
     npa = _pt(refreshed["next_planned_run_at"])
     assert npa is not None
     # Recomputed from `now`, so it's well below the original future_npa.
@@ -609,7 +646,9 @@ async def test_catchup_caps_burst_at_max_runs(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_catchup_skips_schedule_with_no_cursor(initialized_db, monkeypatch) -> None:
+async def test_catchup_skips_schedule_with_no_cursor(
+    initialized_db, monkeypatch
+) -> None:
     """If _catchup_cursor returns None for a schedule, that schedule is skipped
     entirely (no NPR write, no candidate fetch). Covers the early-continue."""
     sched = await _mk(7110, "110", pattern={"type": "interval", "minutes": 30})
@@ -653,7 +692,9 @@ async def test_catchup_with_missed_but_no_unscheduled_posts(initialized_db) -> N
 
 
 @pytest.mark.asyncio
-async def test_catchup_swallows_per_schedule_exception(initialized_db, monkeypatch) -> None:
+async def test_catchup_swallows_per_schedule_exception(
+    initialized_db, monkeypatch
+) -> None:
     """If processing one schedule raises, others still run. Covers the per-
     schedule try/except in the catch-up loop."""
     sched = await _mk(7102, "102", pattern={"type": "interval", "minutes": 30})
@@ -676,6 +717,7 @@ async def test_catchup_swallows_per_schedule_exception(initialized_db, monkeypat
 # _process_due_schedules — swallows per-schedule exceptions
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_process_due_schedules_swallows_per_schedule_exception(
     initialized_db, monkeypatch
@@ -690,12 +732,15 @@ async def test_process_due_schedules_swallows_per_schedule_exception(
 
     bot = _make_bot()
     # Should return without raising, despite the inner explosion.
-    await engine._process_due_schedules(bot, rate_limiter=RateLimiter(min_interval_seconds=0))
+    await engine._process_due_schedules(
+        bot, rate_limiter=RateLimiter(min_interval_seconds=0)
+    )
 
 
 # ---------------------------------------------------------------------------
 # _notify_user — exception swallowing
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_notify_user_swallows_send_message_failure(caplog) -> None:
@@ -705,6 +750,7 @@ async def test_notify_user_swallows_send_message_failure(caplog) -> None:
     bot.send_message = AsyncMock(side_effect=RuntimeError("blocked"))
 
     import logging
+
     with caplog.at_level(logging.ERROR, logger="scheduler.engine"):
         await engine._notify_user(bot, 999, "hi", None)
     assert any("Failed to notify" in rec.message for rec in caplog.records)
@@ -718,6 +764,7 @@ async def test_notify_user_swallows_send_message_failure(caplog) -> None:
 # payload looks like, in addition to the user-facing DM. They use the real
 # `services.notifications.notify_admin` path (not a mock) so the debounce-key
 # wiring and message formatting are exercised end-to-end.
+
 
 def _admin_dms_to(bot: MagicMock, admin_user_id: int) -> list[str]:
     """Extract just the message texts from `bot.send_message` calls
@@ -753,7 +800,9 @@ async def test_invalid_pattern_pauses_dms_user_and_admin(
         bot, schedule, now=now, rate_limiter=RateLimiter(min_interval_seconds=0)
     )
 
-    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8101]
+    user_calls = [
+        c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8101
+    ]
     admin_calls = _admin_dms_to(bot, 9999)
     assert len(user_calls) == 1
     assert len(admin_calls) == 1
@@ -800,9 +849,7 @@ async def test_send_failure_after_max_retries_dms_admin_with_error(
 
 
 @pytest.mark.asyncio
-async def test_empty_queue_does_not_dm_admin(
-    initialized_db, monkeypatch
-) -> None:
+async def test_empty_queue_does_not_dm_admin(initialized_db, monkeypatch) -> None:
     """Empty queue is the user running out of posts, not a bug; only the
     user gets DM'd. Pinning this so a future change can't silently start
     pinging the admin every time someone drains a queue."""
@@ -819,13 +866,16 @@ async def test_empty_queue_does_not_dm_admin(
     )
 
     assert _admin_dms_to(bot, 9999) == []
-    user_calls = [c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8103]
+    user_calls = [
+        c for c in bot.send_message.await_args_list if c.kwargs.get("chat_id") == 8103
+    ]
     assert len(user_calls) == 1
 
 
 # ---------------------------------------------------------------------------
 # Heartbeat
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_heartbeat_pings_admin_when_active_schedules_are_stale(
@@ -841,9 +891,7 @@ async def test_heartbeat_pings_admin_when_active_schedules_are_stale(
     await _set_last_run_at(sid, datetime.now(timezone.utc) - timedelta(hours=48))
 
     bot = _make_bot()
-    await engine._heartbeat_check(
-        bot, now=datetime.now(timezone.utc), active_count=1
-    )
+    await engine._heartbeat_check(bot, now=datetime.now(timezone.utc), active_count=1)
 
     admin_calls = _admin_dms_to(bot, 9999)
     assert len(admin_calls) == 1
@@ -852,9 +900,7 @@ async def test_heartbeat_pings_admin_when_active_schedules_are_stale(
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_silent_when_recent_run(
-    initialized_db, monkeypatch
-) -> None:
+async def test_heartbeat_silent_when_recent_run(initialized_db, monkeypatch) -> None:
     monkeypatch.setenv("ADMIN_USER_ID", "9999")
     monkeypatch.setattr(engine, "HEARTBEAT_MAX_HOURS", 24)
 
@@ -863,9 +909,7 @@ async def test_heartbeat_silent_when_recent_run(
     await _set_last_run_at(sid, datetime.now(timezone.utc) - timedelta(hours=1))
 
     bot = _make_bot()
-    await engine._heartbeat_check(
-        bot, now=datetime.now(timezone.utc), active_count=1
-    )
+    await engine._heartbeat_check(bot, now=datetime.now(timezone.utc), active_count=1)
 
     assert _admin_dms_to(bot, 9999) == []
 
@@ -877,9 +921,7 @@ async def test_heartbeat_silent_when_no_active_schedules(monkeypatch) -> None:
     monkeypatch.setenv("ADMIN_USER_ID", "9999")
 
     bot = _make_bot()
-    await engine._heartbeat_check(
-        bot, now=datetime.now(timezone.utc), active_count=0
-    )
+    await engine._heartbeat_check(bot, now=datetime.now(timezone.utc), active_count=0)
 
     assert _admin_dms_to(bot, 9999) == []
 
@@ -896,9 +938,7 @@ async def test_heartbeat_silent_when_active_but_never_fired(
     await _mk(8203, "203")  # last_run_at is NULL
 
     bot = _make_bot()
-    await engine._heartbeat_check(
-        bot, now=datetime.now(timezone.utc), active_count=1
-    )
+    await engine._heartbeat_check(bot, now=datetime.now(timezone.utc), active_count=1)
 
     assert _admin_dms_to(bot, 9999) == []
 
@@ -977,7 +1017,9 @@ async def test_schedule_paused_send_failure_log_carries_structured_event(
         )
 
     records = _records_with_event(caplog, "schedule_paused_send_failure")
-    assert len(records) == 1, "schedule_paused_send_failure record missing or duplicated"
+    assert len(records) == 1, (
+        "schedule_paused_send_failure record missing or duplicated"
+    )
     rec = records[0]
     assert rec.schedule_id == sid
     assert rec.post_id == pid

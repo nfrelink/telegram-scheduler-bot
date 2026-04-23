@@ -20,7 +20,9 @@ def db_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Set DATABASE_PATH to a temporary sqlite file for this test."""
     db_path = tmp_path / "scheduler_test.db"
     monkeypatch.setenv("DATABASE_PATH", str(db_path))
-    monkeypatch.setenv("DEFAULT_TIMEZONE", os.getenv("DEFAULT_TIMEZONE", "UTC") or "UTC")
+    monkeypatch.setenv(
+        "DEFAULT_TIMEZONE", os.getenv("DEFAULT_TIMEZONE", "UTC") or "UTC"
+    )
     return db_path
 
 
@@ -31,4 +33,3 @@ async def initialized_db(db_env: Path) -> Path:
 
     await init_database()
     return db_env
-

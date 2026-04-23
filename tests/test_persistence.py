@@ -23,7 +23,10 @@ from persistence import (
 # Configuration
 # ---------------------------------------------------------------------------
 
-def test_build_persistence_returns_configured_instance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_build_persistence_returns_configured_instance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """No existing file: returns an atomic PicklePersistence with the
     expected flush interval and all four data slots enabled."""
     monkeypatch.setenv("BOT_PERSISTENCE_PATH", str(tmp_path / "state.pickle"))
@@ -40,7 +43,9 @@ def test_build_persistence_returns_configured_instance(tmp_path: Path, monkeypat
     assert store.callback_data is True
 
 
-def test_build_persistence_creates_parent_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_build_persistence_creates_parent_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """First-run safety: the parent directory is created if missing so the
     persistence file can be written on the first flush."""
     nested = tmp_path / "deeper" / "still" / "state.pickle"
@@ -55,6 +60,7 @@ def test_build_persistence_creates_parent_directory(tmp_path: Path, monkeypatch:
 # ---------------------------------------------------------------------------
 # Round-trip
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class _StagedItem:
@@ -115,6 +121,7 @@ async def test_user_data_round_trips_representative_payload(
 # ---------------------------------------------------------------------------
 # Atomic write semantics
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_atomic_write_leaves_no_temp_file_after_flush(
@@ -206,6 +213,7 @@ async def test_atomic_write_temp_file_uses_pid_suffix(
 # Corrupt-file fallback
 # ---------------------------------------------------------------------------
 
+
 def test_build_persistence_returns_noop_when_pickle_is_corrupt(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -275,6 +283,7 @@ async def test_noop_persistence_satisfies_interface() -> None:
 # End-to-end startup
 # ---------------------------------------------------------------------------
 
+
 def test_create_application_starts_when_pickle_is_corrupt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -299,4 +308,6 @@ def test_create_application_starts_when_pickle_is_corrupt(
     # ValueError still fired, create_application would have raised before
     # adding most of these.
     total_handlers = sum(len(group) for group in application.handlers.values())
-    assert total_handlers >= 15, f"unexpectedly few handlers registered: {total_handlers}"
+    assert total_handlers >= 15, (
+        f"unexpectedly few handlers registered: {total_handlers}"
+    )

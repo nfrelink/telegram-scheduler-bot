@@ -5,7 +5,12 @@ from __future__ import annotations
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import CallbackQueryHandler, ContextTypes, ConversationHandler, CommandHandler
+from telegram.ext import (
+    CallbackQueryHandler,
+    ContextTypes,
+    ConversationHandler,
+    CommandHandler,
+)
 
 from database import queries as db
 from handlers.common import ensure_user_record
@@ -35,7 +40,9 @@ async def duplicates_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     channel = await db.get_channel_by_id(int(channel_db_id))
     if channel is None:
-        await update.message.reply_text("Selected channel not found. Use /select to pick one.")
+        await update.message.reply_text(
+            "Selected channel not found. Use /select to pick one."
+        )
         return ConversationHandler.END
 
     text, keyboard = await _build_status_message(user_id, int(channel_db_id), channel)
@@ -43,7 +50,9 @@ async def duplicates_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return VIEWING
 
 
-async def duplicates_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def duplicates_callback(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Handle toggle button presses."""
     query = update.callback_query
     if query is None or update.effective_user is None:
@@ -101,13 +110,21 @@ async def _build_status_message(
         f"  Your alerts: {user_status}\n"
     )
 
-    channel_btn_label = "Disable for channel" if channel_enabled else "Enable for channel"
+    channel_btn_label = (
+        "Disable for channel" if channel_enabled else "Enable for channel"
+    )
     user_btn_label = "Mute my alerts" if user_enabled else "Unmute my alerts"
 
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(channel_btn_label, callback_data="dupset:toggle_channel")],
-        [InlineKeyboardButton(user_btn_label, callback_data="dupset:toggle_user")],
-    ])
+    keyboard = InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    channel_btn_label, callback_data="dupset:toggle_channel"
+                )
+            ],
+            [InlineKeyboardButton(user_btn_label, callback_data="dupset:toggle_user")],
+        ]
+    )
     return text, keyboard
 
 

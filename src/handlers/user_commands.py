@@ -133,7 +133,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         logger.info("Handled /start for user_id=%s", user_id)
     except Exception as e:
-        logger.error("Error in start_command for user_id=%s: %s", user_id, e, exc_info=True)
+        logger.error(
+            "Error in start_command for user_id=%s: %s", user_id, e, exc_info=True
+        )
         await update.message.reply_text("An error occurred. Please try again.")
 
 
@@ -145,7 +147,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     help_text = _help_text()
-    details = await db.get_user_context_details(update.effective_user.id) if update.effective_user else {}
+    details = (
+        await db.get_user_context_details(update.effective_user.id)
+        if update.effective_user
+        else {}
+    )
 
     if details.get("telegram_channel_id") or details.get("selected_schedule_id"):
         from handlers.selection import selection_segments  # local import
@@ -162,7 +168,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(upload_nudge)
 
 
-async def pending_media_nudge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def pending_media_nudge(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Low-priority fallback: remind user about pending staging when they send
     media outside of any active conversation (e.g. after a bot restart)."""
     if update.effective_user is None or update.message is None:
@@ -179,4 +187,3 @@ async def pending_media_nudge(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"This media was not added — no active upload session.\n"
         f"You have {count} item(s) from a previous upload. Send /bulk to resume or discard them."
     )
-

@@ -30,61 +30,77 @@ def _unknown_timezone_message(raw: str, *, include_guided_hint: bool = True) -> 
         tail += "\nOr use /timezone for guided selection."
     return head + tail
 
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Callback data tokens
 # ---------------------------------------------------------------------------
 _CB_REGIONS = "tz:regions"
-_CB_REGION_PREFIX = "tz:r:"     # + region key
-_CB_SET_PREFIX = "tz:s:"        # + IANA name (use data[len(_CB_SET_PREFIX):] to extract)
+_CB_REGION_PREFIX = "tz:r:"  # + region key
+_CB_SET_PREFIX = "tz:s:"  # + IANA name (use data[len(_CB_SET_PREFIX):] to extract)
 _CB_MANUAL = "tz:manual"
 
 # ---------------------------------------------------------------------------
 # Region / timezone data
 # ---------------------------------------------------------------------------
 _REGIONS: dict[str, tuple[str, list[tuple[str, str]]]] = {
-    "africa": ("Africa", [
-        ("Cairo", "Africa/Cairo"),
-        ("Lagos", "Africa/Lagos"),
-        ("Nairobi", "Africa/Nairobi"),
-        ("Johannesburg", "Africa/Johannesburg"),
-        ("Casablanca", "Africa/Casablanca"),
-        ("Accra", "Africa/Accra"),
-    ]),
-    "americas": ("Americas", [
-        ("New York", "America/New_York"),
-        ("Chicago", "America/Chicago"),
-        ("Denver", "America/Denver"),
-        ("Los Angeles", "America/Los_Angeles"),
-        ("Toronto", "America/Toronto"),
-        ("Sao Paulo", "America/Sao_Paulo"),
-        ("Mexico City", "America/Mexico_City"),
-        ("Buenos Aires", "America/Argentina/Buenos_Aires"),
-    ]),
-    "asia": ("Asia & Pacific", [
-        ("Dubai", "Asia/Dubai"),
-        ("Kolkata", "Asia/Kolkata"),
-        ("Bangkok", "Asia/Bangkok"),
-        ("Singapore", "Asia/Singapore"),
-        ("Shanghai", "Asia/Shanghai"),
-        ("Tokyo", "Asia/Tokyo"),
-        ("Seoul", "Asia/Seoul"),
-        ("Sydney", "Australia/Sydney"),
-    ]),
-    "europe": ("Europe", [
-        ("Amsterdam", "Europe/Amsterdam"),
-        ("Berlin", "Europe/Berlin"),
-        ("London", "Europe/London"),
-        ("Moscow", "Europe/Moscow"),
-        ("Paris", "Europe/Paris"),
-        ("Rome", "Europe/Rome"),
-        ("Stockholm", "Europe/Stockholm"),
-        ("Zurich", "Europe/Zurich"),
-    ]),
-    "utc": ("UTC / Other", [
-        ("UTC", "UTC"),
-    ]),
+    "africa": (
+        "Africa",
+        [
+            ("Cairo", "Africa/Cairo"),
+            ("Lagos", "Africa/Lagos"),
+            ("Nairobi", "Africa/Nairobi"),
+            ("Johannesburg", "Africa/Johannesburg"),
+            ("Casablanca", "Africa/Casablanca"),
+            ("Accra", "Africa/Accra"),
+        ],
+    ),
+    "americas": (
+        "Americas",
+        [
+            ("New York", "America/New_York"),
+            ("Chicago", "America/Chicago"),
+            ("Denver", "America/Denver"),
+            ("Los Angeles", "America/Los_Angeles"),
+            ("Toronto", "America/Toronto"),
+            ("Sao Paulo", "America/Sao_Paulo"),
+            ("Mexico City", "America/Mexico_City"),
+            ("Buenos Aires", "America/Argentina/Buenos_Aires"),
+        ],
+    ),
+    "asia": (
+        "Asia & Pacific",
+        [
+            ("Dubai", "Asia/Dubai"),
+            ("Kolkata", "Asia/Kolkata"),
+            ("Bangkok", "Asia/Bangkok"),
+            ("Singapore", "Asia/Singapore"),
+            ("Shanghai", "Asia/Shanghai"),
+            ("Tokyo", "Asia/Tokyo"),
+            ("Seoul", "Asia/Seoul"),
+            ("Sydney", "Australia/Sydney"),
+        ],
+    ),
+    "europe": (
+        "Europe",
+        [
+            ("Amsterdam", "Europe/Amsterdam"),
+            ("Berlin", "Europe/Berlin"),
+            ("London", "Europe/London"),
+            ("Moscow", "Europe/Moscow"),
+            ("Paris", "Europe/Paris"),
+            ("Rome", "Europe/Rome"),
+            ("Stockholm", "Europe/Stockholm"),
+            ("Zurich", "Europe/Zurich"),
+        ],
+    ),
+    "utc": (
+        "UTC / Other",
+        [
+            ("UTC", "UTC"),
+        ],
+    ),
 }
 
 
@@ -92,12 +108,21 @@ _REGIONS: dict[str, tuple[str, list[tuple[str, str]]]] = {
 # Keyboard builders
 # ---------------------------------------------------------------------------
 
+
 def _regions_keyboard() -> InlineKeyboardMarkup:
     """Return the top-level region selection keyboard."""
     rows = []
     for key, (label, _) in _REGIONS.items():
-        rows.append([InlineKeyboardButton(label, callback_data=f"{_CB_REGION_PREFIX}{key}")])
-    rows.append([InlineKeyboardButton("Enter manually (/settimezone)", callback_data=_CB_MANUAL)])
+        rows.append(
+            [InlineKeyboardButton(label, callback_data=f"{_CB_REGION_PREFIX}{key}")]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "Enter manually (/settimezone)", callback_data=_CB_MANUAL
+            )
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -110,13 +135,21 @@ def _region_keyboard(region_key: str) -> InlineKeyboardMarkup | None:
     # Two buttons per row.
     pair: list[InlineKeyboardButton] = []
     for label, iana in timezones:
-        pair.append(InlineKeyboardButton(label, callback_data=f"{_CB_SET_PREFIX}{iana}"))
+        pair.append(
+            InlineKeyboardButton(label, callback_data=f"{_CB_SET_PREFIX}{iana}")
+        )
         if len(pair) == 2:
             rows.append(pair)
             pair = []
     if pair:
         rows.append(pair)
-    rows.append([InlineKeyboardButton("Enter manually (/settimezone)", callback_data=_CB_MANUAL)])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "Enter manually (/settimezone)", callback_data=_CB_MANUAL
+            )
+        ]
+    )
     rows.append([InlineKeyboardButton("< Back", callback_data=_CB_REGIONS)])
     return InlineKeyboardMarkup(rows)
 
@@ -124,6 +157,7 @@ def _region_keyboard(region_key: str) -> InlineKeyboardMarkup | None:
 # ---------------------------------------------------------------------------
 # Public helper: send a fresh timezone prompt message
 # ---------------------------------------------------------------------------
+
 
 async def send_timezone_prompt(*, chat_id: int, bot: Any) -> None:
     """Send a new timezone selection message to the given chat."""
@@ -138,6 +172,7 @@ async def send_timezone_prompt(*, chat_id: int, bot: Any) -> None:
 # Command handlers
 # ---------------------------------------------------------------------------
 
+
 async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Open the guided timezone selection flow."""
     await ensure_user_record(update, context)
@@ -149,7 +184,9 @@ async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
-async def gettimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def gettimezone_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Show the user's configured timezone (or default)."""
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
@@ -174,7 +211,9 @@ async def gettimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(text)
 
 
-async def settimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def settimezone_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Set the user's timezone by IANA name (power-user text command)."""
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
@@ -194,7 +233,9 @@ async def settimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     if lowered in {"default", "clear", "reset"}:
         await db.set_user_timezone(update.effective_user.id, None)
         effective = default_timezone_name()
-        await update.message.reply_text(f"Timezone cleared. Using default: {effective}.")
+        await update.message.reply_text(
+            f"Timezone cleared. Using default: {effective}."
+        )
         return
 
     if not is_valid_timezone(raw):
@@ -212,6 +253,7 @@ async def settimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ---------------------------------------------------------------------------
 # Callback handler
 # ---------------------------------------------------------------------------
+
 
 async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all tz:* inline keyboard callbacks."""
@@ -236,10 +278,12 @@ async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # Drill into a region.
     if data.startswith(_CB_REGION_PREFIX):
-        region_key = data[len(_CB_REGION_PREFIX):]
+        region_key = data[len(_CB_REGION_PREFIX) :]
         keyboard = _region_keyboard(region_key)
         if keyboard is None:
-            await query.edit_message_text("Unknown region. Please try again.", reply_markup=_regions_keyboard())
+            await query.edit_message_text(
+                "Unknown region. Please try again.", reply_markup=_regions_keyboard()
+            )
             return
         region_label = _REGIONS[region_key][0]
         try:
@@ -253,7 +297,7 @@ async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     # Set a specific timezone.
     if data.startswith(_CB_SET_PREFIX):
-        iana_name = data[len(_CB_SET_PREFIX):]
+        iana_name = data[len(_CB_SET_PREFIX) :]
         if not is_valid_timezone(iana_name):
             try:
                 await query.edit_message_text(
@@ -288,9 +332,13 @@ async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 "  /settimezone Asia/Kolkata\n"
                 "  /settimezone America/New_York\n\n"
                 "Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("< Back", callback_data=_CB_REGIONS),
-                ]]),
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton("< Back", callback_data=_CB_REGIONS),
+                        ]
+                    ]
+                ),
             )
         except Exception:
             pass

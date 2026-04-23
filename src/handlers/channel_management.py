@@ -31,7 +31,9 @@ _SHOWING = 0
 _AWAITING_ADD = 1
 
 
-async def _channels_list_text_and_keyboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
+async def _channels_list_text_and_keyboard(
+    user_id: int,
+) -> tuple[str, InlineKeyboardMarkup]:
     """Build the channel list display."""
     channels = await db.get_user_channels(user_id)
     if not channels:
@@ -42,22 +44,28 @@ async def _channels_list_text_and_keyboard(user_id: int) -> tuple[str, InlineKey
             "2) Tap Add channel below, then either send the channel's numeric ID or @handle, "
             "or simply forward any message from that channel here"
         )
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Add channel", callback_data="ch:add")],
-        ])
+        keyboard = InlineKeyboardMarkup(
+            [
+                [InlineKeyboardButton("Add channel", callback_data="ch:add")],
+            ]
+        )
     else:
         n = len(channels)
         text = f"Your verified channels ({n}):"
         rows: list[list[InlineKeyboardButton]] = []
         for ch in channels:
             ch_id = int(ch["id"])
-            name = str(ch.get("channel_name") or ch.get("channel_id") or f"Channel {ch_id}")
+            name = str(
+                ch.get("channel_name") or ch.get("channel_id") or f"Channel {ch_id}"
+            )
             count = await db.get_channel_queue_count(ch_id)
             label = f"{name}  ({count} queued)" if count else name
-            rows.append([
-                InlineKeyboardButton(label, callback_data="ch:noop"),
-                InlineKeyboardButton("Remove", callback_data=f"ch:rm:{ch_id}"),
-            ])
+            rows.append(
+                [
+                    InlineKeyboardButton(label, callback_data="ch:noop"),
+                    InlineKeyboardButton("Remove", callback_data=f"ch:rm:{ch_id}"),
+                ]
+            )
         rows.append([InlineKeyboardButton("Add channel", callback_data="ch:add")])
         keyboard = InlineKeyboardMarkup(rows)
     return text, keyboard
@@ -98,17 +106,21 @@ async def _run_add_flow(
         return
 
     telegram_channel_id = str(chat.id)
-    channel_name = chat.title or (f"@{chat.username}" if chat.username else telegram_channel_id)
+    channel_name = chat.title or (
+        f"@{chat.username}" if chat.username else telegram_channel_id
+    )
 
     existing = await db.get_channel_by_telegram_id(telegram_channel_id)
     if existing is not None and int(existing["user_id"]) == user_id:
-        text, entities = render([
-            Segment("Channel '"),
-            Segment(str(existing["channel_name"])),
-            Segment("' is already verified (ID: "),
-            Segment(telegram_channel_id, code=True),
-            Segment(")."),
-        ])
+        text, entities = render(
+            [
+                Segment("Channel '"),
+                Segment(str(existing["channel_name"])),
+                Segment("' is already verified (ID: "),
+                Segment(telegram_channel_id, code=True),
+                Segment(")."),
+            ]
+        )
         await reply_fn(text, entities=entities)
         return
 
@@ -121,7 +133,9 @@ async def _run_add_flow(
                 "Add me as an administrator with posting permission first."
             )
             return
-        if bot_member.status == "administrator" and not getattr(bot_member, "can_post_messages", True):
+        if bot_member.status == "administrator" and not getattr(
+            bot_member, "can_post_messages", True
+        ):
             await reply_fn(
                 "I am an admin but do not have permission to post messages.\n"
                 "Please grant me posting permission."
@@ -132,26 +146,39 @@ async def _run_add_flow(
             await reply_fn("You are not an admin of that channel.")
             return
     except Exception as e:
-        logger.error("Admin check failed for channel %s user %s: %s", telegram_channel_id, user_id, e)
+        logger.error(
+            "Admin check failed for channel %s user %s: %s",
+            telegram_channel_id,
+            user_id,
+            e,
+        )
         await reply_fn(
             "Could not verify permissions. Make sure you added me as administrator and try again."
         )
         return
 
-    code = await db.create_verification_code(user_id=user_id, telegram_channel_id=telegram_channel_id)
+    code = await db.create_verification_code(
+        user_id=user_id, telegram_channel_id=telegram_channel_id
+    )
     await reply_fn(
         f"Permissions verified for '{channel_name}'.\n\n"
         "Now post this code to the channel to complete verification:\n\n"
         f"{code}\n\n"
         "The bot will detect it automatically. The code expires in 10 minutes."
     )
-    logger.info("User %s: issued verification code for channel %s", user_id, telegram_channel_id)
+    logger.info(
+        "User %s: issued verification code for channel %s", user_id, telegram_channel_id
+    )
 
 
 async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """/channels — show the channel list with action buttons."""
     await ensure_user_record(update, context)
-    if update.message is None or update.effective_user is None or update.effective_chat is None:
+    if (
+        update.message is None
+        or update.effective_user is None
+        or update.effective_chat is None
+    ):
         return ConversationHandler.END
 
     text, keyboard = await _channels_list_text_and_keyboard(update.effective_user.id)
@@ -202,14 +229,22 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
         lines = [f"Remove '{name}'?"]
         if n_sched or n_posts:
-            lines.append(f"This will also delete {n_sched} schedule(s) and {n_posts} queued post(s).")
+            lines.append(
+                f"This will also delete {n_sched} schedule(s) and {n_posts} queued post(s)."
+            )
         try:
             await query.edit_message_text(
                 "\n".join(lines),
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Yes, remove", callback_data=f"ch:rmok:{ch_id}"),
-                    InlineKeyboardButton("Cancel", callback_data="ch:back"),
-                ]]),
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "Yes, remove", callback_data=f"ch:rmok:{ch_id}"
+                            ),
+                            InlineKeyboardButton("Cancel", callback_data="ch:back"),
+                        ]
+                    ]
+                ),
             )
         except Exception:
             pass
@@ -249,7 +284,9 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return _SHOWING
 
 
-async def channels_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def channels_add_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Handle the user's text channel ID, @handle, or forwarded message during AWAITING_ADD."""
     msg = update.message
     if msg is None or update.effective_user is None:

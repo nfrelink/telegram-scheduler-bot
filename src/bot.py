@@ -6,7 +6,13 @@ import logging
 import os
 
 from telegram import BotCommand
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
 
 from handlers.admin import broadcast_command, debug_command, stats_command
 from handlers.channel_management import channels_conversation_handler
@@ -21,7 +27,12 @@ from handlers.queue_management import (
 )
 from handlers.schedule_management import schedules_conversation_handler
 from handlers.selection import select_callback, select_command
-from handlers.timezone_management import gettimezone_command, settimezone_command, timezone_callback, timezone_command
+from handlers.timezone_management import (
+    gettimezone_command,
+    settimezone_command,
+    timezone_callback,
+    timezone_command,
+)
 from handlers.user_commands import help_command, pending_media_nudge, start_command
 from handlers.verification import channel_post_handler
 from persistence import build_persistence
@@ -68,10 +79,16 @@ def _safe_update_meta(update: object) -> dict[str, object]:
         effective_user = getattr(update, "effective_user", None)
         effective_chat = getattr(update, "effective_chat", None)
         effective_message = getattr(update, "effective_message", None)
-        meta["user_id"] = getattr(effective_user, "id", None) if effective_user is not None else None
-        meta["chat_id"] = getattr(effective_chat, "id", None) if effective_chat is not None else None
+        meta["user_id"] = (
+            getattr(effective_user, "id", None) if effective_user is not None else None
+        )
+        meta["chat_id"] = (
+            getattr(effective_chat, "id", None) if effective_chat is not None else None
+        )
         meta["message_id"] = (
-            getattr(effective_message, "message_id", None) if effective_message is not None else None
+            getattr(effective_message, "message_id", None)
+            if effective_message is not None
+            else None
         )
     except Exception:
         return meta
@@ -102,7 +119,9 @@ async def error_handler(update: object, context) -> None:  # type: ignore[no-unt
 
     err = context.error
     error_type = type(err).__name__ if err is not None else "UnknownError"
-    error_message = (str(err).strip() if err is not None else "") or "(no error message)"
+    error_message = (
+        str(err).strip() if err is not None else ""
+    ) or "(no error message)"
 
     await notifications.notify_admin(
         context.bot,
@@ -126,10 +145,7 @@ def create_application() -> Application:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
     application = (
-        Application.builder()
-        .token(token)
-        .persistence(build_persistence())
-        .build()
+        Application.builder().token(token).persistence(build_persistence()).build()
     )
 
     # Core user commands
@@ -164,11 +180,16 @@ def create_application() -> Application:
     # Pin-date conversation must be registered before the general qv: handler
     # so its qv:pd:* entry point takes priority.
     application.add_handler(pin_date_conversation_handler)
-    application.add_handler(CallbackQueryHandler(queue_browser_callback, pattern=r"^qv:"))
+    application.add_handler(
+        CallbackQueryHandler(queue_browser_callback, pattern=r"^qv:")
+    )
 
     # Channel posts: verification code detection
     application.add_handler(
-        MessageHandler(filters.ChatType.CHANNEL & (filters.TEXT | filters.CAPTION), channel_post_handler)
+        MessageHandler(
+            filters.ChatType.CHANNEL & (filters.TEXT | filters.CAPTION),
+            channel_post_handler,
+        )
     )
 
     # Admin commands (restricted to ADMIN_USER_ID)
@@ -180,7 +201,8 @@ def create_application() -> Application:
     # send media outside of any active conversation (e.g. after a bot restart).
     application.add_handler(
         MessageHandler(
-            filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
+            filters.ChatType.PRIVATE
+            & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
             pending_media_nudge,
         ),
         group=99,
@@ -188,4 +210,3 @@ def create_application() -> Application:
 
     application.add_error_handler(error_handler)
     return application
-

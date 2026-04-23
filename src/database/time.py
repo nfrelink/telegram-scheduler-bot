@@ -45,4 +45,3 @@ def parse_timestamp(value: Any) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt
-

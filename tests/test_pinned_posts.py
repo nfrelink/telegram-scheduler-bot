@@ -22,6 +22,7 @@ from handlers.queue_management import _parse_date_input, _parse_time_input
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 async def _make_schedule(user_id: int, channel_suffix: str) -> int:
     channel = await db.create_channel(
         user_id=user_id,
@@ -42,13 +43,18 @@ async def _make_schedule(user_id: int, channel_suffix: str) -> int:
 # DB helpers
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_set_and_clear_post_pinned_at(initialized_db) -> None:
     user_id = 7001
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     schedule_id = await _make_schedule(user_id, "001")
 
-    await db.add_queued_posts_bulk(schedule_id, [{"media_type": "photo", "file_id": "x1"}])
+    await db.add_queued_posts_bulk(
+        schedule_id, [{"media_type": "photo", "file_id": "x1"}]
+    )
     posts = await db.get_queued_posts(schedule_id, limit=1)
     post_id = int(posts[0]["id"])
 
@@ -71,9 +77,13 @@ async def test_set_and_clear_post_pinned_at(initialized_db) -> None:
 @pytest.mark.asyncio
 async def test_get_earliest_pinned_at_returns_none_when_no_pins(initialized_db) -> None:
     user_id = 7002
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     schedule_id = await _make_schedule(user_id, "002")
-    await db.add_queued_posts_bulk(schedule_id, [{"media_type": "photo", "file_id": "y1"}])
+    await db.add_queued_posts_bulk(
+        schedule_id, [{"media_type": "photo", "file_id": "y1"}]
+    )
 
     result = await db.get_earliest_pinned_at()
     assert result is None
@@ -82,12 +92,17 @@ async def test_get_earliest_pinned_at_returns_none_when_no_pins(initialized_db) 
 @pytest.mark.asyncio
 async def test_get_earliest_pinned_at_returns_min_value(initialized_db) -> None:
     user_id = 7003
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     schedule_id = await _make_schedule(user_id, "003")
 
     await db.add_queued_posts_bulk(
         schedule_id,
-        [{"media_type": "photo", "file_id": "a"}, {"media_type": "photo", "file_id": "b"}],
+        [
+            {"media_type": "photo", "file_id": "a"},
+            {"media_type": "photo", "file_id": "b"},
+        ],
     )
     posts = await db.get_queued_posts(schedule_id, limit=2)
     id_a, id_b = int(posts[0]["id"]), int(posts[1]["id"])
@@ -107,11 +122,16 @@ async def test_get_earliest_pinned_at_returns_min_value(initialized_db) -> None:
 # get_next_queued_post two-tier priority
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
-async def test_get_next_queued_post_returns_due_pinned_before_fifo(initialized_db) -> None:
+async def test_get_next_queued_post_returns_due_pinned_before_fifo(
+    initialized_db,
+) -> None:
     """A pinned post whose pinned_at <= now is returned ahead of FIFO posts."""
     user_id = 7004
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     schedule_id = await _make_schedule(user_id, "004")
 
     await db.add_queued_posts_bulk(
@@ -135,10 +155,14 @@ async def test_get_next_queued_post_returns_due_pinned_before_fifo(initialized_d
 
 
 @pytest.mark.asyncio
-async def test_get_next_queued_post_ignores_future_pinned_and_returns_fifo(initialized_db) -> None:
+async def test_get_next_queued_post_ignores_future_pinned_and_returns_fifo(
+    initialized_db,
+) -> None:
     """A pinned post whose pinned_at is in the future is excluded; the FIFO head is returned."""
     user_id = 7005
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     schedule_id = await _make_schedule(user_id, "005")
 
     await db.add_queued_posts_bulk(
@@ -161,10 +185,14 @@ async def test_get_next_queued_post_ignores_future_pinned_and_returns_fifo(initi
 
 
 @pytest.mark.asyncio
-async def test_get_next_queued_post_earliest_pinned_wins_when_multiple_due(initialized_db) -> None:
+async def test_get_next_queued_post_earliest_pinned_wins_when_multiple_due(
+    initialized_db,
+) -> None:
     """When multiple pinned posts are due, the one with the earliest pinned_at is returned."""
     user_id = 7006
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     schedule_id = await _make_schedule(user_id, "006")
 
     await db.add_queued_posts_bulk(
@@ -179,8 +207,12 @@ async def test_get_next_queued_post_earliest_pinned_wins_when_multiple_due(initi
     id_earlier = next(p for p in posts if p["file_id"] == "pin_earlier")["id"]
 
     now = datetime.now(timezone.utc)
-    await db.set_post_pinned_at(int(id_later), now - timedelta(hours=1), user_id=user_id)
-    await db.set_post_pinned_at(int(id_earlier), now - timedelta(hours=2), user_id=user_id)
+    await db.set_post_pinned_at(
+        int(id_later), now - timedelta(hours=1), user_id=user_id
+    )
+    await db.set_post_pinned_at(
+        int(id_earlier), now - timedelta(hours=2), user_id=user_id
+    )
 
     next_post = await db.get_next_queued_post(schedule_id, now=now)
     assert next_post is not None
@@ -191,12 +223,15 @@ async def test_get_next_queued_post_earliest_pinned_wins_when_multiple_due(initi
 # get_queued_posts_unscheduled excludes pinned posts
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_get_queued_posts_unscheduled_excludes_pinned(initialized_db) -> None:
     """Pinned posts must not be returned by get_queued_posts_unscheduled so the
     catch-up scheduler cannot overwrite their pinned_at with a scheduled_for value."""
     user_id = 7007
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
     schedule_id = await _make_schedule(user_id, "007")
 
     await db.add_queued_posts_bulk(
@@ -225,34 +260,40 @@ async def test_get_queued_posts_unscheduled_excludes_pinned(initialized_db) -> N
 TODAY = date(2026, 3, 16)  # fixed reference date for deterministic tests
 
 
-@pytest.mark.parametrize("text,expected", [
-    # DD/MM/YYYY
-    ("25/12/2026", date(2026, 12, 25)),
-    ("01/01/2027", date(2027, 1, 1)),
-    # DD/MM — infer nearest future year
-    ("25/12", date(2026, 12, 25)),
-    ("10/03", date(2027, 3, 10)),   # already passed in 2026 (today is 16 Mar)
-    # DD Mon YYYY
-    ("25 Dec 2026", date(2026, 12, 25)),
-    ("1 Jan 2027", date(2027, 1, 1)),
-    # DD Mon — infer nearest future year
-    ("25 Dec", date(2026, 12, 25)),
-    ("5 Mar", date(2027, 3, 5)),    # already passed in 2026
-    # DD Month YYYY (full name)
-    ("25 December 2026", date(2026, 12, 25)),
-])
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        # DD/MM/YYYY
+        ("25/12/2026", date(2026, 12, 25)),
+        ("01/01/2027", date(2027, 1, 1)),
+        # DD/MM — infer nearest future year
+        ("25/12", date(2026, 12, 25)),
+        ("10/03", date(2027, 3, 10)),  # already passed in 2026 (today is 16 Mar)
+        # DD Mon YYYY
+        ("25 Dec 2026", date(2026, 12, 25)),
+        ("1 Jan 2027", date(2027, 1, 1)),
+        # DD Mon — infer nearest future year
+        ("25 Dec", date(2026, 12, 25)),
+        ("5 Mar", date(2027, 3, 5)),  # already passed in 2026
+        # DD Month YYYY (full name)
+        ("25 December 2026", date(2026, 12, 25)),
+    ],
+)
 def test_parse_date_input_valid(text: str, expected: date) -> None:
     result = _parse_date_input(text, now=TODAY)
     assert result == expected, f"For {text!r}: expected {expected}, got {result}"
 
 
-@pytest.mark.parametrize("text", [
-    "not a date",
-    "32/01/2026",   # invalid day
-    "00/00",
-    "2026-12-25",   # ISO format not supported
-    "",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "not a date",
+        "32/01/2026",  # invalid day
+        "00/00",
+        "2026-12-25",  # ISO format not supported
+        "",
+    ],
+)
 def test_parse_date_input_invalid(text: str) -> None:
     assert _parse_date_input(text, now=TODAY) is None
 
@@ -261,24 +302,31 @@ def test_parse_date_input_invalid(text: str) -> None:
 # _parse_time_input
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("text,expected", [
-    ("20:00", (20, 0)),
-    ("09:30", (9, 30)),
-    ("0:00", (0, 0)),
-    ("23:59", (23, 59)),
-    ("2000", (20, 0)),   # HHMM compact form
-    ("0930", (9, 30)),
-])
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("20:00", (20, 0)),
+        ("09:30", (9, 30)),
+        ("0:00", (0, 0)),
+        ("23:59", (23, 59)),
+        ("2000", (20, 0)),  # HHMM compact form
+        ("0930", (9, 30)),
+    ],
+)
 def test_parse_time_input_valid(text: str, expected: tuple[int, int]) -> None:
     assert _parse_time_input(text) == expected
 
 
-@pytest.mark.parametrize("text", [
-    "25:00",   # hour out of range
-    "20:60",   # minute out of range
-    "noon",
-    "",
-    "12",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "25:00",  # hour out of range
+        "20:60",  # minute out of range
+        "noon",
+        "",
+        "12",
+    ],
+)
 def test_parse_time_input_invalid(text: str) -> None:
     assert _parse_time_input(text) is None

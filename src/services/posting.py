@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # Enqueue
 # ---------------------------------------------------------------------------
 
+
 async def enqueue_bulk(
     schedule_id: int,
     *,
@@ -63,6 +64,7 @@ async def enqueue_bulk(
 # Schedule attachment for queued posts (catch-up / retry)
 # ---------------------------------------------------------------------------
 
+
 async def bulk_set_scheduled_for(post_updates: list[tuple[int, datetime]]) -> None:
     """Set `scheduled_for` for multiple posts in one transaction."""
     await db.bulk_update_posts_scheduled_for(post_updates)
@@ -71,6 +73,7 @@ async def bulk_set_scheduled_for(post_updates: list[tuple[int, datetime]]) -> No
 # ---------------------------------------------------------------------------
 # Pinning
 # ---------------------------------------------------------------------------
+
 
 async def pin(post_id: int, *, pinned_at: datetime, user_id: int) -> None:
     """Pin a queued post to a specific send datetime."""
@@ -85,6 +88,7 @@ async def unpin(post_id: int, *, user_id: int) -> None:
 # ---------------------------------------------------------------------------
 # Send completion orchestrators (atomic)
 # ---------------------------------------------------------------------------
+
 
 async def complete_send(
     *,

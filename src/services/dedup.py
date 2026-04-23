@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # Settings
 # ---------------------------------------------------------------------------
 
+
 async def is_channel_scanning_enabled(channel_db_id: int) -> bool:
     """True when the channel owner has switched on duplicate scanning."""
     return await db.get_channel_duplicate_detection(channel_db_id)
@@ -63,6 +64,7 @@ async def should_check(*, channel_db_id: int, user_id: int) -> bool:
 # Match lookup
 # ---------------------------------------------------------------------------
 
+
 async def find_by_file_unique_id(
     channel_db_id: int, file_unique_id: str
 ) -> dict[str, Any] | None:
@@ -71,9 +73,7 @@ async def find_by_file_unique_id(
     return await db.find_fingerprint_by_file_unique_id(channel_db_id, file_unique_id)
 
 
-async def find_by_dhash(
-    channel_db_id: int, dhash_value: int
-) -> dict[str, Any] | None:
+async def find_by_dhash(channel_db_id: int, dhash_value: int) -> dict[str, Any] | None:
     """Layer 2: perceptual hash search. Photos only (others have no dHash).
 
     Loads every existing fingerprint's dhash for the channel and returns the

@@ -18,8 +18,8 @@ from utils.tg_text import Segment
 logger = logging.getLogger(__name__)
 
 _CB_BACK = "sc:back"
-_CB_CHANNEL = "sc:ch:"   # + channel_db_id
-_CB_SET = "sc:set:"      # + channel_db_id:schedule_id
+_CB_CHANNEL = "sc:ch:"  # + channel_db_id
+_CB_SET = "sc:set:"  # + channel_db_id:schedule_id
 
 
 def selection_segments(details: dict) -> list[Segment]:
@@ -62,15 +62,23 @@ async def _channels_keyboard(user_id: int) -> tuple[str, InlineKeyboardMarkup | 
     rows = []
     for ch in channels:
         ch_id = int(ch["id"])
-        name = str(ch.get("channel_name") or ch.get("telegram_channel_id") or f"Channel {ch_id}")
+        name = str(
+            ch.get("channel_name")
+            or ch.get("telegram_channel_id")
+            or f"Channel {ch_id}"
+        )
         count = await db.get_channel_queue_count(ch_id)
         label = f"{name}  ({count} queued)" if count else name
-        rows.append([InlineKeyboardButton(label, callback_data=f"{_CB_CHANNEL}{ch_id}")])
+        rows.append(
+            [InlineKeyboardButton(label, callback_data=f"{_CB_CHANNEL}{ch_id}")]
+        )
 
     return "Select a channel:", InlineKeyboardMarkup(rows)
 
 
-async def _schedules_keyboard(channel_db_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
+async def _schedules_keyboard(
+    channel_db_id: int,
+) -> tuple[str, InlineKeyboardMarkup | None]:
     """Build the schedule list keyboard for a given channel."""
     schedules = await db.get_channel_schedules(channel_db_id)
     if not schedules:
@@ -84,7 +92,13 @@ async def _schedules_keyboard(channel_db_id: int) -> tuple[str, InlineKeyboardMa
         state = _state_label.get(str(s.get("state") or ""), str(s.get("state") or ""))
         count = await db.get_queue_count(s_id)
         label = f"{name}  •  {state}  •  {count} queued"
-        rows.append([InlineKeyboardButton(label, callback_data=f"{_CB_SET}{channel_db_id}:{s_id}")])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    label, callback_data=f"{_CB_SET}{channel_db_id}:{s_id}"
+                )
+            ]
+        )
 
     rows.append([InlineKeyboardButton("< Back", callback_data=_CB_BACK)])
     return "Select a schedule:", InlineKeyboardMarkup(rows)
@@ -120,7 +134,7 @@ async def select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     if data.startswith(_CB_CHANNEL):
         try:
-            channel_db_id = int(data[len(_CB_CHANNEL):])
+            channel_db_id = int(data[len(_CB_CHANNEL) :])
         except ValueError:
             return
 
@@ -142,7 +156,11 @@ async def select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         if keyboard is None:
             ch_name = next(
                 (
-                    str(c.get("channel_name") or c.get("telegram_channel_id") or f"Channel {channel_db_id}")
+                    str(
+                        c.get("channel_name")
+                        or c.get("telegram_channel_id")
+                        or f"Channel {channel_db_id}"
+                    )
                     for c in channels
                     if int(c["id"]) == channel_db_id
                 ),
@@ -156,7 +174,7 @@ async def select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if data.startswith(_CB_SET):
-        parts = data[len(_CB_SET):].split(":")
+        parts = data[len(_CB_SET) :].split(":")
         if len(parts) != 2:
             return
         try:
@@ -180,7 +198,14 @@ async def select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         channel_name = details.get("channel_name") or f"Channel {channel_db_id}"
         schedule_name = details.get("schedule_name") or f"Schedule {schedule_id}"
         try:
-            await query.edit_message_text(f"Selected: {channel_name} / {schedule_name}.")
+            await query.edit_message_text(
+                f"Selected: {channel_name} / {schedule_name}."
+            )
         except Exception:
             pass
-        logger.info("User %s selected channel=%s schedule=%s", user_id, channel_db_id, schedule_id)
+        logger.info(
+            "User %s selected channel=%s schedule=%s",
+            user_id,
+            channel_db_id,
+            schedule_id,
+        )

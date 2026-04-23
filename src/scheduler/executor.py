@@ -18,7 +18,9 @@ from telegram.ext import ExtBot
 
 logger = logging.getLogger(__name__)
 
-_FILE_ID_ERROR_RE = re.compile(r"(file[_ ]?id|file identifier|wrong file)", re.IGNORECASE)
+_FILE_ID_ERROR_RE = re.compile(
+    r"(file[_ ]?id|file identifier|wrong file)", re.IGNORECASE
+)
 
 # Maps media_type -> (bot method name, media keyword argument name)
 _SINGLE_SEND: dict[str, tuple[str, str]] = {
@@ -166,7 +168,12 @@ async def _send_post_once(
         method_name, media_kwarg = _SINGLE_SEND[media_type]
         method = getattr(bot, method_name)
         payload = _resolve_file_ref(file_id=file_id, file_path=file_path)
-        kwargs = dict(chat_id=telegram_channel_id, caption=caption, parse_mode=parse_mode, caption_entities=entities)
+        kwargs = dict(
+            chat_id=telegram_channel_id,
+            caption=caption,
+            parse_mode=parse_mode,
+            caption_entities=entities,
+        )
         if isinstance(payload, Path):
             with payload.open("rb") as f:
                 await method(**{media_kwarg: f}, **kwargs)
@@ -190,7 +197,9 @@ async def _send_post_once(
                     message_ids=message_ids,
                 )
                 if len(result) != len(message_ids):
-                    raise RuntimeError("forward_messages returned fewer results than requested")
+                    raise RuntimeError(
+                        "forward_messages returned fewer results than requested"
+                    )
                 return True
 
             with ExitStack() as stack:
@@ -302,7 +311,9 @@ def _parse_media_group(
         caption = item.get("caption")
         caption_parse_mode = item.get("caption_parse_mode")
         caption_entities = item.get("caption_entities")
-        payload = _resolve_file_ref(file_id=item.get("file_id"), file_path=item.get("file_path"))
+        payload = _resolve_file_ref(
+            file_id=item.get("file_id"), file_path=item.get("file_path")
+        )
         if isinstance(payload, Path):
             payload = stack.enter_context(payload.open("rb"))
 
@@ -312,12 +323,21 @@ def _parse_media_group(
         media_cls = _INPUT_MEDIA.get(media_type)
         if media_cls is None:
             raise ValueError(f"Unsupported media_type in media group: {media_type}")
-        media.append(media_cls(media=payload, caption=caption, parse_mode=parse_mode, caption_entities=entities))
+        media.append(
+            media_cls(
+                media=payload,
+                caption=caption,
+                parse_mode=parse_mode,
+                caption_entities=entities,
+            )
+        )
 
     return media
 
 
-def _parse_media_group_forward_refs(media_group_data: str) -> tuple[int, list[int]] | None:
+def _parse_media_group_forward_refs(
+    media_group_data: str,
+) -> tuple[int, list[int]] | None:
     """Parse media_group_data for forwarding metadata.
 
     Returns (from_chat_id, message_ids) if every item has:
@@ -394,4 +414,3 @@ def _decode_entities(value: Any) -> list[MessageEntity] | None:
                 continue
 
     return entities or None
-

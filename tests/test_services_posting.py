@@ -15,6 +15,7 @@ from services import posting
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 async def _seed_user_channel_schedule(user_id: int, *, tg_id: str = "-1099"):
     """Helper: create user/channel/schedule and return (channel_id, schedule_id)."""
     await db.upsert_user(
@@ -43,6 +44,7 @@ async def _today_stats() -> dict[str, int]:
 # enqueue_bulk
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_enqueue_bulk_links_fingerprints_by_file_id(initialized_db) -> None:
     """enqueue_bulk must stamp queued_post_id onto fingerprints whose file_id
@@ -55,9 +57,24 @@ async def test_enqueue_bulk_links_fingerprints_by_file_id(initialized_db) -> Non
         {"media_type": "photo"},  # native forward, no file_id
     ]
     fingerprints = [
-        {"file_unique_id": "u-p1", "dhash": None, "file_id": "p1", "media_type": "photo"},
-        {"file_unique_id": "u-p2", "dhash": None, "file_id": "p2", "media_type": "photo"},
-        {"file_unique_id": "u-orphan", "dhash": None, "file_id": "no-such", "media_type": "photo"},
+        {
+            "file_unique_id": "u-p1",
+            "dhash": None,
+            "file_id": "p1",
+            "media_type": "photo",
+        },
+        {
+            "file_unique_id": "u-p2",
+            "dhash": None,
+            "file_id": "p2",
+            "media_type": "photo",
+        },
+        {
+            "file_unique_id": "u-orphan",
+            "dhash": None,
+            "file_id": "no-such",
+            "media_type": "photo",
+        },
     ]
     inserted, post_ids = await posting.enqueue_bulk(
         sid, posts=posts, fingerprints=fingerprints, channel_db_id=ch_id
@@ -92,11 +109,14 @@ async def test_enqueue_bulk_skips_fingerprints_when_none(initialized_db) -> None
 # pin / unpin / bulk_set_scheduled_for
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_pin_and_unpin_roundtrip(initialized_db) -> None:
     user_id = 8004
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-8004")
-    _, ids = await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "k"}])
+    _, ids = await db.add_queued_posts_bulk(
+        sid, [{"media_type": "photo", "file_id": "k"}]
+    )
     when = datetime.now(timezone.utc) + timedelta(hours=1)
     await posting.pin(ids[0], pinned_at=when, user_id=user_id)
     post = (await db.get_queued_posts(sid, limit=1))[0]
@@ -111,7 +131,11 @@ async def test_bulk_set_scheduled_for_applies_to_all_ids(initialized_db) -> None
     user_id = 8005
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-8005")
     _, ids = await db.add_queued_posts_bulk(
-        sid, [{"media_type": "photo", "file_id": "a"}, {"media_type": "photo", "file_id": "b"}]
+        sid,
+        [
+            {"media_type": "photo", "file_id": "a"},
+            {"media_type": "photo", "file_id": "b"},
+        ],
     )
     base = datetime.now(timezone.utc) + timedelta(seconds=30)
     await posting.bulk_set_scheduled_for(
@@ -124,6 +148,7 @@ async def test_bulk_set_scheduled_for_applies_to_all_ids(initialized_db) -> None
 # ---------------------------------------------------------------------------
 # Atomic send-completion orchestrators
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_complete_send_applies_all_writes(initialized_db) -> None:
@@ -139,8 +164,13 @@ async def test_complete_send_applies_all_writes(initialized_db) -> None:
     await db.add_fingerprints_bulk(
         ch_id,
         [
-            {"file_unique_id": "u1", "dhash": "1", "file_id": "x1",
-             "media_type": "photo", "queued_post_id": post_ids[0]},
+            {
+                "file_unique_id": "u1",
+                "dhash": "1",
+                "file_id": "x1",
+                "media_type": "photo",
+                "queued_post_id": post_ids[0],
+            },
         ],
     )
     stats_before = await _today_stats()
@@ -186,13 +216,19 @@ async def test_complete_send_rolls_back_on_inner_failure(
     user_id = 9002
     ch_id, sid = await _seed_user_channel_schedule(user_id, tg_id="-9002")
     _, post_ids = await db.add_queued_posts_bulk(
-        sid, [{"media_type": "photo", "file_id": "y1"}],
+        sid,
+        [{"media_type": "photo", "file_id": "y1"}],
     )
     await db.add_fingerprints_bulk(
         ch_id,
         [
-            {"file_unique_id": "v1", "dhash": "1", "file_id": "y1",
-             "media_type": "photo", "queued_post_id": post_ids[0]},
+            {
+                "file_unique_id": "v1",
+                "dhash": "1",
+                "file_id": "y1",
+                "media_type": "photo",
+                "queued_post_id": post_ids[0],
+            },
         ],
     )
     stats_before = await _today_stats()
@@ -232,7 +268,8 @@ async def test_complete_retry_increments_failures_and_updates_post(
     user_id = 9003
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-9003")
     _, post_ids = await db.add_queued_posts_bulk(
-        sid, [{"media_type": "photo", "file_id": "z1"}],
+        sid,
+        [{"media_type": "photo", "file_id": "z1"}],
     )
     stats_before = await _today_stats()
     retry_time = datetime.now(timezone.utc) + timedelta(minutes=4)
@@ -285,10 +322,20 @@ async def test_cancel_removes_post_and_unposted_fingerprints(initialized_db) -> 
     await db.add_fingerprints_bulk(
         ch_id,
         [
-            {"file_unique_id": "ua", "dhash": "1", "file_id": "a",
-             "media_type": "photo", "queued_post_id": post_ids[0]},
-            {"file_unique_id": "ub", "dhash": "2", "file_id": "b",
-             "media_type": "photo", "queued_post_id": post_ids[1]},
+            {
+                "file_unique_id": "ua",
+                "dhash": "1",
+                "file_id": "a",
+                "media_type": "photo",
+                "queued_post_id": post_ids[0],
+            },
+            {
+                "file_unique_id": "ub",
+                "dhash": "2",
+                "file_id": "b",
+                "media_type": "photo",
+                "queued_post_id": post_ids[1],
+            },
         ],
     )
 
@@ -311,13 +358,19 @@ async def test_cancel_rolls_back_fingerprint_delete_on_failure(
     user_id = 9006
     ch_id, sid = await _seed_user_channel_schedule(user_id, tg_id="-9006")
     _, post_ids = await db.add_queued_posts_bulk(
-        sid, [{"media_type": "photo", "file_id": "k"}],
+        sid,
+        [{"media_type": "photo", "file_id": "k"}],
     )
     await db.add_fingerprints_bulk(
         ch_id,
         [
-            {"file_unique_id": "uk", "dhash": "1", "file_id": "k",
-             "media_type": "photo", "queued_post_id": post_ids[0]},
+            {
+                "file_unique_id": "uk",
+                "dhash": "1",
+                "file_id": "k",
+                "media_type": "photo",
+                "queued_post_id": post_ids[0],
+            },
         ],
     )
 

@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 _CODE_CANDIDATE_RE = re.compile(r"[A-Za-z0-9_-]{15,64}")
 
 
-async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def channel_post_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Detect posted verification codes in channels and complete verification."""
     message = update.channel_post
     if message is None:
@@ -37,7 +39,9 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     matched_user_id: int | None = None
     matched_code: str | None = None
     for candidate in candidates[:10]:
-        user_id = await db.verify_code(code=candidate, telegram_channel_id=telegram_channel_id)
+        user_id = await db.verify_code(
+            code=candidate, telegram_channel_id=telegram_channel_id
+        )
         if user_id is not None:
             matched_user_id = int(user_id)
             matched_code = candidate
@@ -46,7 +50,9 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if matched_user_id is None:
         return
 
-    channel_name = message.chat.title or (f"@{message.chat.username}" if message.chat.username else telegram_channel_id)
+    channel_name = message.chat.title or (
+        f"@{message.chat.username}" if message.chat.username else telegram_channel_id
+    )
 
     existing = await db.get_channel_by_telegram_id(telegram_channel_id)
     channel_db_id: int
@@ -78,7 +84,9 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         channel_db_id = int(existing["id"])
         # Keep channel_name fresh if it changed.
         if existing.get("channel_name") != channel_name:
-            await db.update_channel_name(channel_db_id, channel_name=channel_name, user_id=matched_user_id)
+            await db.update_channel_name(
+                channel_db_id, channel_name=channel_name, user_id=matched_user_id
+            )
 
     # Auto-select the verified channel so /schedules works immediately.
     await db.set_user_context(
@@ -93,8 +101,14 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await message.delete()
         deletion_msg = "The verification message has been deleted."
     except Exception as e:
-        logger.info("Could not delete verification message in channel %s: %s", telegram_channel_id, e)
-        deletion_msg = "Please delete the verification message from the channel manually."
+        logger.info(
+            "Could not delete verification message in channel %s: %s",
+            telegram_channel_id,
+            e,
+        )
+        deletion_msg = (
+            "Please delete the verification message from the channel manually."
+        )
 
     schedules = await db.get_channel_schedules(channel_db_id)
     if schedules:
@@ -124,4 +138,3 @@ async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         matched_user_id,
         "<matched>" if matched_code else "<none>",
     )
-

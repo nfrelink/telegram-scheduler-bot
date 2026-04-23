@@ -13,8 +13,12 @@ from scheduler import engine
 @pytest.mark.asyncio
 async def test_catch_up_sets_scheduled_for_with_spacing(initialized_db) -> None:
     user_id = 1000
-    await db.upsert_user(user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False)
-    channel = await db.create_channel(user_id=user_id, telegram_channel_id="-3003", channel_name="Channel 3")
+    await db.upsert_user(
+        user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
+    )
+    channel = await db.create_channel(
+        user_id=user_id, telegram_channel_id="-3003", channel_name="Channel 3"
+    )
 
     schedule = await db.create_schedule(
         channel_db_id=int(channel["id"]),
@@ -60,4 +64,3 @@ async def test_catch_up_sets_scheduled_for_with_spacing(initialized_db) -> None:
     # Scheduler sleep should be <= default when something is scheduled soon.
     sleep_s = await engine._get_sleep_seconds(60)
     assert 1.0 <= sleep_s <= 60.0
-

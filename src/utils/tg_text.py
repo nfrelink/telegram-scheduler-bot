@@ -35,4 +35,3 @@ def render(segments: list[Segment]) -> tuple[str, list[MessageEntity] | None]:
         offset += seg_len
 
     return "".join(parts), (entities or None)
-

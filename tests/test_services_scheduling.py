@@ -17,6 +17,7 @@ from services import scheduling
 # Setup helper
 # ---------------------------------------------------------------------------
 
+
 async def _mk_schedule(
     user_id: int,
     suffix: str,
@@ -47,21 +48,37 @@ async def _mk_schedule(
 # next_planned_for (pure)
 # ---------------------------------------------------------------------------
 
+
 def test_next_planned_for_paused_returns_none() -> None:
-    schedule = {"id": 1, "state": "paused", "pattern": {"type": "interval", "minutes": 5}, "timezone": "UTC"}
+    schedule = {
+        "id": 1,
+        "state": "paused",
+        "pattern": {"type": "interval", "minutes": 5},
+        "timezone": "UTC",
+    }
     now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
     assert scheduling.next_planned_for(schedule, after=now) is None
 
 
 def test_next_planned_for_active_returns_calculation() -> None:
-    schedule = {"id": 1, "state": "active", "pattern": {"type": "interval", "minutes": 5}, "timezone": "UTC"}
+    schedule = {
+        "id": 1,
+        "state": "active",
+        "pattern": {"type": "interval", "minutes": 5},
+        "timezone": "UTC",
+    }
     now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
     out = scheduling.next_planned_for(schedule, after=now)
     assert out == now + timedelta(minutes=5)
 
 
 def test_next_planned_for_invalid_pattern_returns_none(caplog) -> None:
-    schedule = {"id": 42, "state": "active", "pattern": {"type": "bogus"}, "timezone": "UTC"}
+    schedule = {
+        "id": 42,
+        "state": "active",
+        "pattern": {"type": "bogus"},
+        "timezone": "UTC",
+    }
     now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
     with caplog.at_level(logging.WARNING, logger="services.scheduling"):
         out = scheduling.next_planned_for(schedule, after=now)
@@ -72,6 +89,7 @@ def test_next_planned_for_invalid_pattern_returns_none(caplog) -> None:
 # ---------------------------------------------------------------------------
 # recompute_next_run / persist_next_run
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_recompute_active_schedule_writes_npr(initialized_db) -> None:
@@ -136,6 +154,7 @@ async def test_persist_next_run_writes_value(initialized_db) -> None:
 # ---------------------------------------------------------------------------
 # Lifecycle wrappers
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_create_defaults_to_paused_with_null_npr(initialized_db) -> None:
@@ -256,6 +275,7 @@ async def test_delete_removes_schedule(initialized_db) -> None:
 # ---------------------------------------------------------------------------
 # Timezone validation at service boundary
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_create_rejects_invalid_timezone(initialized_db) -> None:

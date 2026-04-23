@@ -303,4 +303,3 @@ async def _ensure_column(db, *, table: str, column: str, sql_type: str) -> None:
 
     logger.info("Migrating DB: adding %s.%s", table, column)
     await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
-

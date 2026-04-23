@@ -36,6 +36,7 @@ from telegram.ext import ConversationHandler
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_item(
     media_type: str = "photo",
     file_id: str = "fid_1",
@@ -146,7 +147,12 @@ class TestFinalizeMediaGroupItems:
             _make_item(file_id="b", caption="cap2"),
         ]
         result = json.loads(
-            _finalize_media_group_items(items, caption_mode="preserve", single_caption=None, single_caption_entities=None)
+            _finalize_media_group_items(
+                items,
+                caption_mode="preserve",
+                single_caption=None,
+                single_caption_entities=None,
+            )
         )
         assert len(result) == 2
         assert result[0]["file_id"] == "a"
@@ -167,20 +173,32 @@ class TestFinalizeMediaGroupItems:
             )
         )
         assert result[0]["caption"] == "shared caption"
-        assert result[0]["caption_entities"] == [{"type": "bold", "offset": 0, "length": 6}]
+        assert result[0]["caption_entities"] == [
+            {"type": "bold", "offset": 0, "length": 6}
+        ]
         assert result[1]["caption"] is None
         assert result[1]["caption_entities"] is None
 
     def test_remove_caption(self) -> None:
         items = [_make_item(file_id="a", caption="will be removed")]
         result = json.loads(
-            _finalize_media_group_items(items, caption_mode="remove", single_caption=None, single_caption_entities=None)
+            _finalize_media_group_items(
+                items,
+                caption_mode="remove",
+                single_caption=None,
+                single_caption_entities=None,
+            )
         )
         assert result[0]["caption"] is None
 
     def test_empty_raises(self) -> None:
         with pytest.raises(ValueError, match="Empty media group"):
-            _finalize_media_group_items([], caption_mode="remove", single_caption=None, single_caption_entities=None)
+            _finalize_media_group_items(
+                [],
+                caption_mode="remove",
+                single_caption=None,
+                single_caption_entities=None,
+            )
 
     def test_items_sorted_by_forward_message_id(self) -> None:
         items = [
@@ -188,7 +206,12 @@ class TestFinalizeMediaGroupItems:
             _make_item(file_id="a", forward_from_message_id=10),
         ]
         result = json.loads(
-            _finalize_media_group_items(items, caption_mode="remove", single_caption=None, single_caption_entities=None)
+            _finalize_media_group_items(
+                items,
+                caption_mode="remove",
+                single_caption=None,
+                single_caption_entities=None,
+            )
         )
         assert result[0]["file_id"] == "a"
         assert result[1]["file_id"] == "b"
@@ -204,7 +227,12 @@ class TestFinalizeMediaGroupItems:
             )
         ]
         result = json.loads(
-            _finalize_media_group_items(items, caption_mode="remove", single_caption=None, single_caption_entities=None)
+            _finalize_media_group_items(
+                items,
+                caption_mode="remove",
+                single_caption=None,
+                single_caption_entities=None,
+            )
         )
         assert result[0]["forward_from_chat_id"] == 111
         assert result[0]["forward_from_message_id"] == 222
@@ -223,11 +251,17 @@ class TestFlushMediaGroup:
         ctx = _mock_context(bulk_caption_mode="remove")
         posts = _get_posts(ctx)
         posts.append({"media_type": "photo", "file_id": "solo"})
-        posts.append({
-            "media_type": "media_group", "file_id": None,
-            "file_path": None, "caption": None, "caption_parse_mode": None,
-            "caption_entities": None, "media_group_data": None,
-        })
+        posts.append(
+            {
+                "media_type": "media_group",
+                "file_id": None,
+                "file_path": None,
+                "caption": None,
+                "caption_parse_mode": None,
+                "caption_entities": None,
+                "media_group_data": None,
+            }
+        )
 
         groups = _get_media_groups(ctx)
         groups["grp1"] = [_make_item(file_id="g1"), _make_item(file_id="g2")]
@@ -283,14 +317,22 @@ class TestApplySplitDecisions:
         ctx = _mock_context()
         posts = _get_posts(ctx)
         posts.append({"media_type": "photo", "file_id": "solo"})
-        posts.append({
-            "media_type": "media_group", "file_id": None,
-            "media_group_data": None,
-        })
+        posts.append(
+            {
+                "media_type": "media_group",
+                "file_id": None,
+                "media_group_data": None,
+            }
+        )
         items = [_make_item(file_id="g1"), _make_item(file_id="g2")]
         ctx.user_data["bulk_split_decisions"] = {1: ("keep", items)}
 
-        _apply_split_decisions(ctx, caption_mode="remove", single_caption=None, single_caption_entities=None)
+        _apply_split_decisions(
+            ctx,
+            caption_mode="remove",
+            single_caption=None,
+            single_caption_entities=None,
+        )
 
         result = ctx.user_data["bulk_posts"]
         assert len(result) == 2
@@ -301,17 +343,25 @@ class TestApplySplitDecisions:
     def test_split_produces_individual_posts(self) -> None:
         ctx = _mock_context()
         posts = _get_posts(ctx)
-        posts.append({
-            "media_type": "media_group", "file_id": None,
-            "media_group_data": None,
-        })
+        posts.append(
+            {
+                "media_type": "media_group",
+                "file_id": None,
+                "media_group_data": None,
+            }
+        )
         items = [
             _make_item(media_type="photo", file_id="g1", caption="c1"),
             _make_item(media_type="video", file_id="g2", caption="c2"),
         ]
         ctx.user_data["bulk_split_decisions"] = {0: ("split", items)}
 
-        _apply_split_decisions(ctx, caption_mode="preserve", single_caption=None, single_caption_entities=None)
+        _apply_split_decisions(
+            ctx,
+            caption_mode="preserve",
+            single_caption=None,
+            single_caption_entities=None,
+        )
 
         result = ctx.user_data["bulk_posts"]
         assert len(result) == 2
@@ -325,20 +375,34 @@ class TestApplySplitDecisions:
         posts = _get_posts(ctx)
         posts.append({"media_type": "photo", "file_id": "solo"})
 
-        _apply_split_decisions(ctx, caption_mode="remove", single_caption=None, single_caption_entities=None)
-        assert ctx.user_data["bulk_posts"] == [{"media_type": "photo", "file_id": "solo"}]
+        _apply_split_decisions(
+            ctx,
+            caption_mode="remove",
+            single_caption=None,
+            single_caption_entities=None,
+        )
+        assert ctx.user_data["bulk_posts"] == [
+            {"media_type": "photo", "file_id": "solo"}
+        ]
 
     def test_mixed_decisions_and_passthrough(self) -> None:
         ctx = _mock_context()
         posts = _get_posts(ctx)
         posts.append({"media_type": "photo", "file_id": "p1"})
-        posts.append({"media_type": "media_group", "file_id": None, "media_group_data": None})
+        posts.append(
+            {"media_type": "media_group", "file_id": None, "media_group_data": None}
+        )
         posts.append({"media_type": "video", "file_id": "v1"})
 
         items = [_make_item(file_id="g1"), _make_item(file_id="g2")]
         ctx.user_data["bulk_split_decisions"] = {1: ("split", items)}
 
-        _apply_split_decisions(ctx, caption_mode="remove", single_caption=None, single_caption_entities=None)
+        _apply_split_decisions(
+            ctx,
+            caption_mode="remove",
+            single_caption=None,
+            single_caption_entities=None,
+        )
 
         result = ctx.user_data["bulk_posts"]
         assert len(result) == 4
@@ -593,7 +657,9 @@ class TestBulkSetCaptionMode:
             with patch("handlers.bulk_upload.db") as mock_db:
                 mock_db.create_bulk_session = AsyncMock()
                 await bulk_set_caption_mode(update, ctx)
-        mock_db.create_bulk_session.assert_called_once_with(42, schedule_id=7, caption_mode="remove")
+        mock_db.create_bulk_session.assert_called_once_with(
+            42, schedule_id=7, caption_mode="remove"
+        )
 
 
 # ===========================================================================
@@ -630,16 +696,41 @@ class TestBulkSetSingleCaption:
 class TestLoadStagingIntoUserData:
     def test_individual_items_loaded(self) -> None:
         ctx = _mock_context()
-        session = {"schedule_id": 5, "caption_mode": "remove", "single_caption": None, "single_caption_entities": None}
+        session = {
+            "schedule_id": 5,
+            "caption_mode": "remove",
+            "single_caption": None,
+            "single_caption_entities": None,
+        }
         items = [
-            {"media_type": "photo", "file_id": "f1", "caption": None, "caption_entities": None,
-             "media_group_id": None, "forward_from_chat_id": None, "forward_from_message_id": None,
-             "forward_origin_chat_id": None, "forward_origin_message_id": None,
-             "raw_origin_chat_id": None, "raw_origin_message_id": None, "raw_origin_is_forwarded": False},
-            {"media_type": "video", "file_id": "f2", "caption": "cap", "caption_entities": None,
-             "media_group_id": None, "forward_from_chat_id": None, "forward_from_message_id": None,
-             "forward_origin_chat_id": None, "forward_origin_message_id": None,
-             "raw_origin_chat_id": None, "raw_origin_message_id": None, "raw_origin_is_forwarded": False},
+            {
+                "media_type": "photo",
+                "file_id": "f1",
+                "caption": None,
+                "caption_entities": None,
+                "media_group_id": None,
+                "forward_from_chat_id": None,
+                "forward_from_message_id": None,
+                "forward_origin_chat_id": None,
+                "forward_origin_message_id": None,
+                "raw_origin_chat_id": None,
+                "raw_origin_message_id": None,
+                "raw_origin_is_forwarded": False,
+            },
+            {
+                "media_type": "video",
+                "file_id": "f2",
+                "caption": "cap",
+                "caption_entities": None,
+                "media_group_id": None,
+                "forward_from_chat_id": None,
+                "forward_from_message_id": None,
+                "forward_origin_chat_id": None,
+                "forward_origin_message_id": None,
+                "raw_origin_chat_id": None,
+                "raw_origin_message_id": None,
+                "raw_origin_is_forwarded": False,
+            },
         ]
         _load_staging_into_user_data(ctx, items, session)
 
@@ -653,20 +744,55 @@ class TestLoadStagingIntoUserData:
 
     def test_media_group_items_reconstructed(self) -> None:
         ctx = _mock_context()
-        session = {"schedule_id": 5, "caption_mode": "remove", "single_caption": None, "single_caption_entities": None}
+        session = {
+            "schedule_id": 5,
+            "caption_mode": "remove",
+            "single_caption": None,
+            "single_caption_entities": None,
+        }
         items = [
-            {"media_type": "photo", "file_id": "solo", "caption": None, "caption_entities": None,
-             "media_group_id": None, "forward_from_chat_id": None, "forward_from_message_id": None,
-             "forward_origin_chat_id": None, "forward_origin_message_id": None,
-             "raw_origin_chat_id": None, "raw_origin_message_id": None, "raw_origin_is_forwarded": False},
-            {"media_type": "photo", "file_id": "g1", "caption": None, "caption_entities": None,
-             "media_group_id": "mg1", "forward_from_chat_id": None, "forward_from_message_id": None,
-             "forward_origin_chat_id": None, "forward_origin_message_id": None,
-             "raw_origin_chat_id": None, "raw_origin_message_id": None, "raw_origin_is_forwarded": False},
-            {"media_type": "video", "file_id": "g2", "caption": None, "caption_entities": None,
-             "media_group_id": "mg1", "forward_from_chat_id": None, "forward_from_message_id": None,
-             "forward_origin_chat_id": None, "forward_origin_message_id": None,
-             "raw_origin_chat_id": None, "raw_origin_message_id": None, "raw_origin_is_forwarded": False},
+            {
+                "media_type": "photo",
+                "file_id": "solo",
+                "caption": None,
+                "caption_entities": None,
+                "media_group_id": None,
+                "forward_from_chat_id": None,
+                "forward_from_message_id": None,
+                "forward_origin_chat_id": None,
+                "forward_origin_message_id": None,
+                "raw_origin_chat_id": None,
+                "raw_origin_message_id": None,
+                "raw_origin_is_forwarded": False,
+            },
+            {
+                "media_type": "photo",
+                "file_id": "g1",
+                "caption": None,
+                "caption_entities": None,
+                "media_group_id": "mg1",
+                "forward_from_chat_id": None,
+                "forward_from_message_id": None,
+                "forward_origin_chat_id": None,
+                "forward_origin_message_id": None,
+                "raw_origin_chat_id": None,
+                "raw_origin_message_id": None,
+                "raw_origin_is_forwarded": False,
+            },
+            {
+                "media_type": "video",
+                "file_id": "g2",
+                "caption": None,
+                "caption_entities": None,
+                "media_group_id": "mg1",
+                "forward_from_chat_id": None,
+                "forward_from_message_id": None,
+                "forward_origin_chat_id": None,
+                "forward_origin_message_id": None,
+                "raw_origin_chat_id": None,
+                "raw_origin_message_id": None,
+                "raw_origin_is_forwarded": False,
+            },
         ]
         _load_staging_into_user_data(ctx, items, session)
 
@@ -697,7 +823,9 @@ class TestLoadStagingIntoUserData:
 
         assert ctx.user_data["bulk_caption_mode"] == "single"
         assert ctx.user_data["bulk_single_caption"] == "shared"
-        assert ctx.user_data["bulk_single_caption_entities"] == [{"type": "bold", "offset": 0, "length": 6}]
+        assert ctx.user_data["bulk_single_caption_entities"] == [
+            {"type": "bold", "offset": 0, "length": 6}
+        ]
 
 
 # ===========================================================================
@@ -724,13 +852,17 @@ class TestBulkConfirmAutoResume:
         return ctx
 
     @staticmethod
-    async def _run(ctx: MagicMock, schedule_state: str) -> tuple[AsyncMock, AsyncMock, int]:
+    async def _run(
+        ctx: MagicMock, schedule_state: str
+    ) -> tuple[AsyncMock, AsyncMock, int]:
         update = _mock_update(text="yes")
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock), \
-             patch("handlers.bulk_upload._clear_staging", new_callable=AsyncMock), \
-             patch("handlers.bulk_upload.posting") as mock_posting, \
-             patch("handlers.bulk_upload.scheduling") as mock_scheduling, \
-             patch("handlers.bulk_upload.db") as mock_db:
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload._clear_staging", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.posting") as mock_posting,
+            patch("handlers.bulk_upload.scheduling") as mock_scheduling,
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
             mock_posting.enqueue_bulk = AsyncMock(return_value=(1, [101]))
             mock_scheduling.resume = AsyncMock()
             mock_scheduling.pause = AsyncMock()

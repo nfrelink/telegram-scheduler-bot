@@ -66,4 +66,3 @@ async def transaction() -> AsyncIterator[aiosqlite.Connection]:
         except Exception:
             await db.rollback()
             raise
-

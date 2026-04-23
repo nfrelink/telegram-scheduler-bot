@@ -46,7 +46,9 @@ async def test_error_handler_sends_admin_dm(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_error_handler_suppresses_duplicate_dm_within_debounce(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_error_handler_suppresses_duplicate_dm_within_debounce(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("ADMIN_USER_ID", "123456")
     monkeypatch.setenv("ADMIN_ERROR_DM_DEBOUNCE_SECONDS", "60")
     update = _mock_update()
@@ -62,7 +64,9 @@ async def test_error_handler_suppresses_duplicate_dm_within_debounce(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_error_handler_no_admin_config_skips_dm(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_error_handler_no_admin_config_skips_dm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("ADMIN_USER_ID", raising=False)
     update = _mock_update()
     context = MagicMock()

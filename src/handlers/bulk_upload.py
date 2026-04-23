@@ -7,7 +7,13 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, MessageEntity, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    MessageEntity,
+    Update,
+)
 from telegram.constants import ChatType
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
@@ -29,7 +35,14 @@ from utils.tg_text import Segment, render, utf16_len
 logger = logging.getLogger(__name__)
 
 
-SELECTING_CAPTION_MODE, WAITING_SINGLE_CAPTION, COLLECTING_MEDIA, CONFIRMING, DECIDING_SPLITS, RESUMING = range(6)
+(
+    SELECTING_CAPTION_MODE,
+    WAITING_SINGLE_CAPTION,
+    COLLECTING_MEDIA,
+    CONFIRMING,
+    DECIDING_SPLITS,
+    RESUMING,
+) = range(6)
 
 
 @dataclass(frozen=True)
@@ -68,14 +81,18 @@ async def _clear_staging(user_id: int) -> None:
     await db.clear_staging(user_id)
 
 
-async def _persist_item_to_staging(user_id: int, item: _CollectedItem, *, media_group_id: str | None = None) -> None:
+async def _persist_item_to_staging(
+    user_id: int, item: _CollectedItem, *, media_group_id: str | None = None
+) -> None:
     """Write-through: persist a collected item to the staging table."""
     await db.add_staging_item(
         user_id,
         media_type=item.media_type,
         file_id=item.file_id,
         caption=item.caption,
-        caption_entities=json.dumps(item.caption_entities) if item.caption_entities else None,
+        caption_entities=json.dumps(item.caption_entities)
+        if item.caption_entities
+        else None,
         media_group_id=media_group_id,
         forward_from_chat_id=item.forward_from_chat_id,
         forward_from_message_id=item.forward_from_message_id,
@@ -131,30 +148,36 @@ def _load_staging_into_user_data(
             if mg_id not in indexes:
                 indexes[mg_id] = len(posts)
                 single_cap_ents = context.user_data.get("bulk_single_caption_entities")
-                posts.append({
-                    "media_type": "media_group",
-                    "file_id": None,
-                    "file_path": None,
-                    "caption": None,
-                    "caption_parse_mode": None,
-                    "caption_entities": json.dumps(single_cap_ents) if single_cap_ents else None,
-                    "media_group_data": None,
-                })
+                posts.append(
+                    {
+                        "media_type": "media_group",
+                        "file_id": None,
+                        "file_path": None,
+                        "caption": None,
+                        "caption_parse_mode": None,
+                        "caption_entities": json.dumps(single_cap_ents)
+                        if single_cap_ents
+                        else None,
+                        "media_group_data": None,
+                    }
+                )
         else:
             cap_ents_str = row.get("caption_entities")
-            posts.append({
-                "media_type": row["media_type"],
-                "file_id": row.get("file_id"),
-                "file_path": None,
-                "caption": row.get("caption"),
-                "caption_parse_mode": None,
-                "caption_entities": cap_ents_str,
-                "forward_from_chat_id": row.get("forward_from_chat_id"),
-                "forward_from_message_id": row.get("forward_from_message_id"),
-                "forward_origin_chat_id": row.get("forward_origin_chat_id"),
-                "forward_origin_message_id": row.get("forward_origin_message_id"),
-                "media_group_data": None,
-            })
+            posts.append(
+                {
+                    "media_type": row["media_type"],
+                    "file_id": row.get("file_id"),
+                    "file_path": None,
+                    "caption": row.get("caption"),
+                    "caption_parse_mode": None,
+                    "caption_entities": cap_ents_str,
+                    "forward_from_chat_id": row.get("forward_from_chat_id"),
+                    "forward_from_message_id": row.get("forward_from_message_id"),
+                    "forward_origin_chat_id": row.get("forward_origin_chat_id"),
+                    "forward_origin_message_id": row.get("forward_origin_message_id"),
+                    "media_group_data": None,
+                }
+            )
 
 
 def _get_caption_mode(context: ContextTypes.DEFAULT_TYPE) -> str | None:
@@ -164,7 +187,9 @@ def _get_caption_mode(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     return None
 
 
-def _get_single_caption_entities(context: ContextTypes.DEFAULT_TYPE) -> list[dict[str, Any]] | None:
+def _get_single_caption_entities(
+    context: ContextTypes.DEFAULT_TYPE,
+) -> list[dict[str, Any]] | None:
     value = context.user_data.get("bulk_single_caption_entities")
     if isinstance(value, list):
         return value
@@ -178,7 +203,9 @@ def _get_single_caption(context: ContextTypes.DEFAULT_TYPE) -> str | None:
     return str(value)
 
 
-def _entities_to_dicts(entities: list[MessageEntity] | None) -> list[dict[str, Any]] | None:
+def _entities_to_dicts(
+    entities: list[MessageEntity] | None,
+) -> list[dict[str, Any]] | None:
     if not entities:
         return None
     return [e.to_dict() for e in entities]
@@ -200,8 +227,14 @@ def _extract_forward_origin_channel(message: Message) -> tuple[int | None, int |
     # Bot API v7+ origin object.
     origin = getattr(message, "forward_origin", None)
     origin_chat = getattr(origin, "chat", None) if origin is not None else None
-    origin_message_id = getattr(origin, "message_id", None) if origin is not None else None
-    if origin_chat is not None and origin_message_id is not None and getattr(origin_chat, "type", None) == ChatType.CHANNEL:
+    origin_message_id = (
+        getattr(origin, "message_id", None) if origin is not None else None
+    )
+    if (
+        origin_chat is not None
+        and origin_message_id is not None
+        and getattr(origin_chat, "type", None) == ChatType.CHANNEL
+    ):
         chat_id_raw = getattr(origin_chat, "id", None)
         if chat_id_raw is not None:
             try:
@@ -270,7 +303,11 @@ def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
         # Inline link: [text](url)
         if ch == "[":
             close_bracket = text.find("]", i + 1)
-            if close_bracket != -1 and close_bracket + 1 < len(text) and text[close_bracket + 1] == "(":
+            if (
+                close_bracket != -1
+                and close_bracket + 1 < len(text)
+                and text[close_bracket + 1] == "("
+            ):
                 close_paren = text.find(")", close_bracket + 2)
                 if close_paren != -1:
                     link_text = text[i + 1 : close_bracket]
@@ -279,7 +316,14 @@ def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
                     _append_plain(link_text)
                     length = utf16_len(link_text)
                     if length and url:
-                        entities.append({"type": "text_link", "offset": start, "length": length, "url": url})
+                        entities.append(
+                            {
+                                "type": "text_link",
+                                "offset": start,
+                                "length": length,
+                                "url": url,
+                            }
+                        )
                     i = close_paren + 1
                     continue
 
@@ -299,7 +343,9 @@ def _get_posts(context: ContextTypes.DEFAULT_TYPE) -> list[dict[str, Any]]:
     return posts
 
 
-def _get_media_groups(context: ContextTypes.DEFAULT_TYPE) -> dict[str, list[_CollectedItem]]:
+def _get_media_groups(
+    context: ContextTypes.DEFAULT_TYPE,
+) -> dict[str, list[_CollectedItem]]:
     groups = context.user_data.get("bulk_media_groups")
     if isinstance(groups, dict):
         return groups
@@ -336,7 +382,9 @@ def _message_to_collected_item(
         caption_entities = single_caption_entities
     else:
         caption = message.caption or None
-        caption_entities = _entities_to_dicts(getattr(message, "caption_entities", None))
+        caption_entities = _entities_to_dicts(
+            getattr(message, "caption_entities", None)
+        )
         if caption is None and caption_entities:
             caption_entities = None
 
@@ -360,7 +408,9 @@ def _message_to_collected_item(
                 forward_from_chat_id = int(chat_id_raw)
                 forward_from_message_id = int(msg_id)
                 forward_origin_chat_id = int(raw_origin_chat_id)
-                forward_origin_message_id = int(raw_origin_msg_id) if raw_origin_msg_id is not None else None
+                forward_origin_message_id = (
+                    int(raw_origin_msg_id) if raw_origin_msg_id is not None else None
+                )
             except (TypeError, ValueError):
                 pass
 
@@ -523,8 +573,12 @@ def _build_split_prompt(
     text += "Keep as one album post, or split into individual posts?"
 
     decision_row = [
-        InlineKeyboardButton("Keep as album", callback_data=f"sp:keep:{placeholder_idx}"),
-        InlineKeyboardButton(f"Split into {count}", callback_data=f"sp:split:{placeholder_idx}"),
+        InlineKeyboardButton(
+            "Keep as album", callback_data=f"sp:keep:{placeholder_idx}"
+        ),
+        InlineKeyboardButton(
+            f"Split into {count}", callback_data=f"sp:split:{placeholder_idx}"
+        ),
     ]
     rows: list[list[InlineKeyboardButton]] = [decision_row]
     if origin_link:
@@ -563,19 +617,23 @@ def _apply_split_decisions(
                 new_posts.append(new_post)
             else:  # "split"
                 for item in items:
-                    new_posts.append({
-                        "media_type": item.media_type,
-                        "file_id": item.file_id,
-                        "file_path": None,
-                        "caption": item.caption,
-                        "caption_parse_mode": None,
-                        "caption_entities": json.dumps(item.caption_entities) if item.caption_entities else None,
-                        "forward_from_chat_id": item.forward_from_chat_id,
-                        "forward_from_message_id": item.forward_from_message_id,
-                        "forward_origin_chat_id": item.forward_origin_chat_id,
-                        "forward_origin_message_id": item.forward_origin_message_id,
-                        "media_group_data": None,
-                    })
+                    new_posts.append(
+                        {
+                            "media_type": item.media_type,
+                            "file_id": item.file_id,
+                            "file_path": None,
+                            "caption": item.caption,
+                            "caption_parse_mode": None,
+                            "caption_entities": json.dumps(item.caption_entities)
+                            if item.caption_entities
+                            else None,
+                            "forward_from_chat_id": item.forward_from_chat_id,
+                            "forward_from_message_id": item.forward_from_message_id,
+                            "forward_origin_chat_id": item.forward_origin_chat_id,
+                            "forward_origin_message_id": item.forward_origin_message_id,
+                            "media_group_data": None,
+                        }
+                    )
         else:
             new_posts.append(post)
 
@@ -611,7 +669,9 @@ async def _show_confirmation_message(
     if via_callback and update.callback_query is not None:
         msg = update.callback_query.message
         if msg is not None:
-            await context.bot.send_message(chat_id=msg.chat_id, text=text, entities=entities)
+            await context.bot.send_message(
+                chat_id=msg.chat_id, text=text, entities=entities
+            )
     elif update.message is not None:
         await update.message.reply_text(text, entities=entities)
 
@@ -627,7 +687,9 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     if update.effective_chat is None or update.effective_chat.type != ChatType.PRIVATE:
-        await update.message.reply_text("Please run /bulk in a private chat with the bot.")
+        await update.message.reply_text(
+            "Please run /bulk in a private chat with the bot."
+        )
         return ConversationHandler.END
 
     user_id = update.effective_user.id
@@ -648,8 +710,7 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     if schedule_id is None:
         await update.message.reply_text(
-            "Usage: /bulk <schedule_id>\n"
-            "Tip: use /select to pick a default schedule."
+            "Usage: /bulk <schedule_id>\nTip: use /select to pick a default schedule."
         )
         return ConversationHandler.END
 
@@ -678,10 +739,18 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             await update.message.reply_text(
                 f"You have {pending_count} item(s) from a previous upload.\n"
                 "Resume or start fresh?",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("Resume", callback_data="bulk_resume:yes"),
-                    InlineKeyboardButton("Start fresh", callback_data="bulk_resume:no"),
-                ]]),
+                reply_markup=InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                "Resume", callback_data="bulk_resume:yes"
+                            ),
+                            InlineKeyboardButton(
+                                "Start fresh", callback_data="bulk_resume:no"
+                            ),
+                        ]
+                    ]
+                ),
             )
             return RESUMING
 
@@ -693,7 +762,11 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["bulk_channel_db_id"] = channel_db_id
 
     details = await db.get_user_context_details(user_id)
-    schedule_name = str(details.get("schedule_name") or schedule.get("name") or f"Schedule {schedule_id}")
+    schedule_name = str(
+        details.get("schedule_name")
+        or schedule.get("name")
+        or f"Schedule {schedule_id}"
+    )
     segments = [
         Segment(f"Bulk upload started for schedule '{schedule_name}'.\n\n"),
         *selection_segments(details),
@@ -705,7 +778,9 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "Tip: messages forwarded from channels in your /forwarding allowlist are always "
             "sent as native Telegram forwards, regardless of caption mode.\n"
         ),
-        Segment("Tip: for 'single', formatting is preserved. You can use [text](url) links and `inline code`.\n\n"),
+        Segment(
+            "Tip: for 'single', formatting is preserved. You can use [text](url) links and `inline code`.\n\n"
+        ),
         Segment("Or /cancel to stop."),
     ]
     text, entities = render(segments)
@@ -713,7 +788,9 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return SELECTING_CAPTION_MODE
 
 
-async def bulk_resume_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def bulk_resume_decision(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Handle the resume/discard decision for a pending staging session."""
     query = update.callback_query
     if query is None or update.effective_user is None:
@@ -728,7 +805,9 @@ async def bulk_resume_decision(update: Update, context: ContextTypes.DEFAULT_TYP
         items = await db.get_staging_items(user_id)
         if not session or not items:
             try:
-                await query.edit_message_text("Session expired. Starting fresh — run /bulk again.")
+                await query.edit_message_text(
+                    "Session expired. Starting fresh — run /bulk again."
+                )
             except Exception:
                 pass
             await _clear_staging(user_id)
@@ -774,7 +853,9 @@ async def bulk_resume_decision(update: Update, context: ContextTypes.DEFAULT_TYP
     return SELECTING_CAPTION_MODE
 
 
-async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def bulk_set_caption_mode(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
         return ConversationHandler.END
@@ -784,7 +865,9 @@ async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TY
     if raw in {"markdown", "markdownv2", "md", "md2", "html"}:
         raw = "single"
     if raw not in {"remove", "single", "preserve"}:
-        await update.message.reply_text("Invalid caption mode. Reply with: remove, single, preserve")
+        await update.message.reply_text(
+            "Invalid caption mode. Reply with: remove, single, preserve"
+        )
         return SELECTING_CAPTION_MODE
 
     context.user_data["bulk_caption_mode"] = raw
@@ -798,7 +881,9 @@ async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TY
         )
 
     if raw == "single":
-        await update.message.reply_text("Send the single caption to apply to all posts.")
+        await update.message.reply_text(
+            "Send the single caption to apply to all posts."
+        )
         return WAITING_SINGLE_CAPTION
 
     await update.message.reply_text(
@@ -809,14 +894,18 @@ async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TY
     return COLLECTING_MEDIA
 
 
-async def bulk_set_single_caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def bulk_set_single_caption(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
         return ConversationHandler.END
 
     raw_text = update.message.text or ""
     if not raw_text.strip():
-        await update.message.reply_text("Caption cannot be empty. Send a caption, or /cancel.")
+        await update.message.reply_text(
+            "Caption cannot be empty. Send a caption, or /cancel."
+        )
         return WAITING_SINGLE_CAPTION
 
     # Prefer Telegram-native formatting if present.
@@ -838,7 +927,9 @@ async def bulk_set_single_caption(update: Update, context: ContextTypes.DEFAULT_
         update.effective_user.id,
         caption_mode="single",
         single_caption=caption_text,
-        single_caption_entities=json.dumps(caption_entities) if caption_entities else None,
+        single_caption_entities=json.dumps(caption_entities)
+        if caption_entities
+        else None,
     )
 
     await update.message.reply_text(
@@ -869,12 +960,14 @@ async def _check_and_warn_duplicate(
     user_id = update.effective_user.id if update.effective_user else 0
 
     def _record_fp(dhash: str | None) -> None:
-        _get_fingerprint_data(context).append({
-            "file_unique_id": item.file_unique_id,
-            "dhash": dhash,
-            "file_id": item.file_id,
-            "media_type": item.media_type,
-        })
+        _get_fingerprint_data(context).append(
+            {
+                "file_unique_id": item.file_unique_id,
+                "dhash": dhash,
+                "file_id": item.file_id,
+                "media_type": item.media_type,
+            }
+        )
 
     if not await dedup.should_check(channel_db_id=channel_db_id, user_id=user_id):
         _record_fp(None)
@@ -884,7 +977,12 @@ async def _check_and_warn_duplicate(
     match_info = await dedup.find_by_file_unique_id(channel_db_id, item.file_unique_id)
 
     # Layer 2: perceptual dHash match (photos only, requires thumbnail download).
-    if match_info is None and item.media_type == "photo" and update.message and update.message.photo:
+    if (
+        match_info is None
+        and item.media_type == "photo"
+        and update.message
+        and update.message.photo
+    ):
         try:
             smallest_file_id = update.message.photo[0].file_id
             dhash_val = await compute_dhash(context.bot, smallest_file_id)
@@ -898,7 +996,9 @@ async def _check_and_warn_duplicate(
             )
             _record_fp(None)
         except Exception:
-            logger.warning("dHash computation failed for file_id=%s", item.file_id, exc_info=True)
+            logger.warning(
+                "dHash computation failed for file_id=%s", item.file_id, exc_info=True
+            )
     else:
         _record_fp(None)
 
@@ -913,12 +1013,16 @@ async def _check_and_warn_duplicate(
     dup_map: dict[int, str] = context.user_data.setdefault("bulk_dup_map", {})
     dup_map[dup_seq] = item.file_id
 
-    keyboard = InlineKeyboardMarkup([
+    keyboard = InlineKeyboardMarkup(
         [
-            InlineKeyboardButton("Remove from upload", callback_data=f"dup:rm:{dup_seq}"),
-            InlineKeyboardButton("Keep", callback_data=f"dup:keep:{dup_seq}"),
+            [
+                InlineKeyboardButton(
+                    "Remove from upload", callback_data=f"dup:rm:{dup_seq}"
+                ),
+                InlineKeyboardButton("Keep", callback_data=f"dup:keep:{dup_seq}"),
+            ]
         ]
-    ])
+    )
     if update.message:
         await update.message.reply_text(
             f"This looks similar to a post from {date_str}.",
@@ -927,7 +1031,9 @@ async def _check_and_warn_duplicate(
         )
 
 
-async def bulk_duplicate_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def bulk_duplicate_decision(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handle remove/keep decisions for duplicate warnings."""
     query = update.callback_query
     if query is None:
@@ -962,7 +1068,9 @@ async def bulk_duplicate_decision(update: Update, context: ContextTypes.DEFAULT_
 
         # Remove from in-memory posts
         posts = _get_posts(context)
-        context.user_data["bulk_posts"] = [p for p in posts if p.get("file_id") != file_id]
+        context.user_data["bulk_posts"] = [
+            p for p in posts if p.get("file_id") != file_id
+        ]
 
         # Remove from media groups
         groups = _get_media_groups(context)
@@ -984,7 +1092,9 @@ async def bulk_duplicate_decision(update: Update, context: ContextTypes.DEFAULT_
 
         remaining = len(_get_posts(context))
         try:
-            await query.edit_message_text(f"Removed from upload. ({remaining} post(s) remaining)")
+            await query.edit_message_text(
+                f"Removed from upload. ({remaining} post(s) remaining)"
+            )
         except Exception:
             pass
 
@@ -1003,25 +1113,35 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     caption_mode = _get_caption_mode(context)
     if caption_mode is None:
-        await update.message.reply_text("Caption mode missing. Restart with /bulk <schedule_id>.")
+        await update.message.reply_text(
+            "Caption mode missing. Restart with /bulk <schedule_id>."
+        )
         return ConversationHandler.END
 
     single_caption = _get_single_caption(context)
     if caption_mode == "single" and not single_caption:
-        await update.message.reply_text("Single caption missing. Restart with /bulk <schedule_id>.")
+        await update.message.reply_text(
+            "Single caption missing. Restart with /bulk <schedule_id>."
+        )
         return ConversationHandler.END
 
-    single_caption_entities = _get_single_caption_entities(context) if caption_mode == "single" else None
+    single_caption_entities = (
+        _get_single_caption_entities(context) if caption_mode == "single" else None
+    )
 
     item = _message_to_collected_item(
         update.message,
         caption_mode=caption_mode,
         single_caption=single_caption,
         single_caption_entities=single_caption_entities,
-        forward_origin_allowlist=set(await db.get_forward_origin_allowlist(update.effective_user.id)),
+        forward_origin_allowlist=set(
+            await db.get_forward_origin_allowlist(update.effective_user.id)
+        ),
     )
     if item is None:
-        await update.message.reply_text("Unsupported message type. Send a photo, video, or document.")
+        await update.message.reply_text(
+            "Unsupported message type. Send a photo, video, or document."
+        )
         return COLLECTING_MEDIA
 
     # Media groups: buffer until group is complete.
@@ -1041,12 +1161,16 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     "file_path": None,
                     "caption": None,
                     "caption_parse_mode": None,
-                    "caption_entities": json.dumps(single_caption_entities) if single_caption_entities else None,
+                    "caption_entities": json.dumps(single_caption_entities)
+                    if single_caption_entities
+                    else None,
                     "media_group_data": None,
                 }
             )
 
-        await _persist_item_to_staging(update.effective_user.id, item, media_group_id=group_id)
+        await _persist_item_to_staging(
+            update.effective_user.id, item, media_group_id=group_id
+        )
 
         channel_db_id = context.user_data.get("bulk_channel_db_id")
         if channel_db_id:
@@ -1066,7 +1190,9 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "file_path": None,
             "caption": item.caption,
             "caption_parse_mode": None,
-            "caption_entities": json.dumps(item.caption_entities) if item.caption_entities else None,
+            "caption_entities": json.dumps(item.caption_entities)
+            if item.caption_entities
+            else None,
             "forward_from_chat_id": item.forward_from_chat_id,
             "forward_from_message_id": item.forward_from_message_id,
             "forward_origin_chat_id": item.forward_origin_chat_id,
@@ -1088,13 +1214,17 @@ async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return COLLECTING_MEDIA
 
 
-async def _flush_media_group(context: ContextTypes.DEFAULT_TYPE, *, group_id: str) -> None:
+async def _flush_media_group(
+    context: ContextTypes.DEFAULT_TYPE, *, group_id: str
+) -> None:
     caption_mode = _get_caption_mode(context)
     if caption_mode is None:
         return
 
     single_caption = _get_single_caption(context)
-    single_caption_entities = _get_single_caption_entities(context) if caption_mode == "single" else None
+    single_caption_entities = (
+        _get_single_caption_entities(context) if caption_mode == "single" else None
+    )
 
     groups = _get_media_groups(context)
     items = groups.pop(group_id, [])
@@ -1119,7 +1249,9 @@ async def _flush_media_group(context: ContextTypes.DEFAULT_TYPE, *, group_id: st
                 "file_path": None,
                 "caption": None,
                 "caption_parse_mode": None,
-                "caption_entities": json.dumps(single_caption_entities) if single_caption_entities else None,
+                "caption_entities": json.dumps(single_caption_entities)
+                if single_caption_entities
+                else None,
                 "media_group_data": media_group_data,
             }
         )
@@ -1130,7 +1262,9 @@ async def _flush_media_group(context: ContextTypes.DEFAULT_TYPE, *, group_id: st
     posts[idx]["file_path"] = None
     posts[idx]["caption"] = None
     posts[idx]["caption_parse_mode"] = None
-    posts[idx]["caption_entities"] = json.dumps(single_caption_entities) if single_caption_entities else None
+    posts[idx]["caption_entities"] = (
+        json.dumps(single_caption_entities) if single_caption_entities else None
+    )
     posts[idx]["media_group_data"] = media_group_data
 
 
@@ -1153,14 +1287,21 @@ async def bulk_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             placeholder_idx = _get_media_group_indexes(context).pop(gid, None)
             if placeholder_idx is not None:
                 first_item = items[0]
-                pending_splits.append({
-                    "placeholder_idx": placeholder_idx,
-                    "items": items,
-                    "count": len(items),
-                    "first_caption": next((i.caption for i in items if i.caption), None),
-                    "origin_link": _origin_link(first_item.raw_origin_chat_id, first_item.raw_origin_message_id),
-                    "reply_to_message_id": first_item.user_message_id,
-                })
+                pending_splits.append(
+                    {
+                        "placeholder_idx": placeholder_idx,
+                        "items": items,
+                        "count": len(items),
+                        "first_caption": next(
+                            (i.caption for i in items if i.caption), None
+                        ),
+                        "origin_link": _origin_link(
+                            first_item.raw_origin_chat_id,
+                            first_item.raw_origin_message_id,
+                        ),
+                        "reply_to_message_id": first_item.user_message_id,
+                    }
+                )
             else:
                 # No placeholder recorded — flush as album silently.
                 await _flush_media_group(context, group_id=gid)
@@ -1169,7 +1310,9 @@ async def bulk_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     posts = _get_posts(context)
     if not posts:
-        await update.message.reply_text("No posts collected yet. Send media, then /done.")
+        await update.message.reply_text(
+            "No posts collected yet. Send media, then /done."
+        )
         return COLLECTING_MEDIA
 
     if pending_splits:
@@ -1179,7 +1322,8 @@ async def bulk_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         context.user_data["bulk_total_splits"] = total_albums
         first = pending_splits[0]
         text, keyboard = _build_split_prompt(
-            first["count"], first["placeholder_idx"],
+            first["count"],
+            first["placeholder_idx"],
             album_num=1,
             total_albums=total_albums,
             first_caption=first.get("first_caption"),
@@ -1214,7 +1358,9 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     schedule_id_raw = context.user_data.get("bulk_schedule_id")
     if schedule_id_raw is None:
-        await update.message.reply_text("Missing schedule id. Restart with /bulk <schedule_id>.")
+        await update.message.reply_text(
+            "Missing schedule id. Restart with /bulk <schedule_id>."
+        )
         return ConversationHandler.END
 
     schedule_id = int(schedule_id_raw)
@@ -1246,7 +1392,9 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     _state_clear(context)
     details = await db.get_user_context_details(update.effective_user.id)
     sched_name = str(schedule.get("name") or f"Schedule {schedule_id}")
-    segments: list[Segment] = [Segment(f"Queued {inserted} posts for '{sched_name}'.\n")]
+    segments: list[Segment] = [
+        Segment(f"Queued {inserted} posts for '{sched_name}'.\n")
+    ]
     if auto_resumed:
         segments.append(Segment("Schedule was empty and is now active.\n\n"))
     elif schedule.get("state") == "paused":
@@ -1256,11 +1404,18 @@ async def bulk_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     segments.extend(selection_segments(details))
     text, entities = render(segments)
     await update.message.reply_text(text, entities=entities)
-    logger.info("User %s queued %s posts for schedule id=%s", update.effective_user.id, inserted, schedule_id)
+    logger.info(
+        "User %s queued %s posts for schedule id=%s",
+        update.effective_user.id,
+        inserted,
+        schedule_id,
+    )
     return ConversationHandler.END
 
 
-async def bulk_split_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def bulk_split_decision(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> int:
     """Handle keep/split decisions for forwarded albums during /done."""
     query = update.callback_query
     if query is None:
@@ -1292,11 +1447,15 @@ async def bulk_split_decision(update: Update, context: ContextTypes.DEFAULT_TYPE
             return DECIDING_SPLITS
 
         if idx != expected_idx:
-            await query.answer("This decision has already been processed.", show_alert=True)
+            await query.answer(
+                "This decision has already been processed.", show_alert=True
+            )
             return DECIDING_SPLITS
 
         action = "keep" if data.startswith("sp:keep:") else "split"
-        decisions: dict[int, Any] = context.user_data.setdefault("bulk_split_decisions", {})
+        decisions: dict[int, Any] = context.user_data.setdefault(
+            "bulk_split_decisions", {}
+        )
         decisions[expected_idx] = (action, current["items"])
         pending.pop(0)
 
@@ -1307,7 +1466,8 @@ async def bulk_split_decision(update: Update, context: ContextTypes.DEFAULT_TYPE
             total_albums = context.user_data.get("bulk_total_splits", len(pending))
             album_num = total_albums - len(pending) + 1
             text, keyboard = _build_split_prompt(
-                next_item["count"], next_item["placeholder_idx"],
+                next_item["count"],
+                next_item["placeholder_idx"],
                 album_num=album_num,
                 total_albums=total_albums,
                 first_caption=next_item.get("first_caption"),
@@ -1355,7 +1515,8 @@ bulk_upload_conversation_handler = ConversationHandler(
         ],
         COLLECTING_MEDIA: [
             MessageHandler(
-                filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
+                filters.ChatType.PRIVATE
+                & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
                 bulk_collect_media,
             ),
             CallbackQueryHandler(bulk_duplicate_decision, pattern=r"^dup:"),
@@ -1365,7 +1526,8 @@ bulk_upload_conversation_handler = ConversationHandler(
         CONFIRMING: [
             MessageHandler(filters.TEXT & ~filters.COMMAND, bulk_confirm),
             MessageHandler(
-                filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
+                filters.ChatType.PRIVATE
+                & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
                 bulk_collect_media,
             ),
             CallbackQueryHandler(bulk_duplicate_decision, pattern=r"^dup:"),
@@ -1379,4 +1541,3 @@ bulk_upload_conversation_handler = ConversationHandler(
     name="bulk_upload",
     persistent=True,
 )
-
