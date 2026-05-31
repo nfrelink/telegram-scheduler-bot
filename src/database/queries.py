@@ -646,6 +646,12 @@ async def add_queued_posts_bulk(
     if not posts:
         return 0, []
 
+    for post in posts:
+        if post.get("media_type") == "media_group" and not post.get("media_group_data"):
+            raise ValueError(
+                f"Cannot queue media_group post without media_group_data (schedule_id={schedule_id})"
+            )
+
     async with transaction() as db:
         cursor = await db.execute(
             "SELECT COALESCE(MAX(position), -1) + 1 FROM queued_posts WHERE schedule_id = ?",

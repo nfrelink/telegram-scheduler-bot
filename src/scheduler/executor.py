@@ -37,16 +37,20 @@ _INPUT_MEDIA: dict[str, type] = {
 }
 
 
+class _PermanentSendError(Exception):
+    """Data integrity error — retrying will never succeed."""
+
+
 async def send_post(
     bot: ExtBot, *, telegram_channel_id: str, post: dict[str, Any]
-) -> tuple[bool, str | None]:
+) -> tuple[bool, str | None, bool]:
     """Send a queued post to a Telegram channel.
 
-    Returns `(True, None)` on success, `(False, error_text)` on failure;
-    `error_text` is `f"{type(e).__name__}: {e}"` of the exception that
-    finally killed the attempt (after the file_id-error retry fallback,
-    if applicable). Callers thread the error string into the admin
-    notification when retries are exhausted.
+    Returns `(True, None, True)` on success, `(False, error_text, retryable)` on
+    failure. `retryable=False` signals a permanent data integrity error; the
+    caller should skip retry scheduling. `error_text` is
+    `f"{type(e).__name__}: {e}"` of the exception that finally killed the
+    attempt (after the file_id-error retry fallback, if applicable).
 
     Supported media_type:
     - photo
@@ -64,7 +68,7 @@ async def send_post(
                 from_chat_id=int(forward_from_chat_id),
                 message_id=int(forward_from_message_id),
             )
-            return True, None
+            return True, None, True
         except Exception as e:
             logger.error(
                 "Failed to forward post id=%s to channel=%s: %s",
@@ -80,7 +84,7 @@ async def send_post(
                     "from_message_id": forward_from_message_id,
                 },
             )
-            return False, _format_error(e)
+            return False, _format_error(e), True
 
     media_type = post.get("media_type")
     caption = post.get("caption")
@@ -102,7 +106,22 @@ async def send_post(
             file_id=file_id,
             file_path=file_path,
         )
-        return True, None
+        return True, None, True
+    except _PermanentSendError as e:
+        logger.error(
+            "Failed to send post id=%s to channel=%s: %s",
+            post.get("id"),
+            telegram_channel_id,
+            e,
+            exc_info=True,
+            extra={
+                "event": "send_failed",
+                "post_id": post.get("id"),
+                "channel_id": telegram_channel_id,
+                "media_type": media_type,
+            },
+        )
+        return False, _format_error(e), False
     except Exception as e:
         if (
             file_id
@@ -120,7 +139,7 @@ async def send_post(
                 caption_entities=caption_entities,
             )
             if ok:
-                return True, None
+                return True, None, True
 
         logger.error(
             "Failed to send post id=%s to channel=%s: %s",
@@ -135,7 +154,7 @@ async def send_post(
                 "media_type": media_type,
             },
         )
-        return False, _format_error(e)
+        return False, _format_error(e), True
 
 
 def _format_error(exc: Exception) -> str:
@@ -185,7 +204,7 @@ async def _send_post_once(
         case "media_group":
             media_group_data = post.get("media_group_data")
             if not media_group_data:
-                raise ValueError("media_group_data missing")
+                raise _PermanentSendError("media_group_data missing")
 
             forward_refs = _parse_media_group_forward_refs(media_group_data)
             if forward_refs is not None:
