@@ -33,9 +33,7 @@ def parse_int(text: str) -> int | None:
         return None
 
 
-async def ensure_user_record(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> dict:
+async def ensure_user_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> dict:
     """Upsert the current user and mark last_active_at."""
     user = update.effective_user
     if user is None:

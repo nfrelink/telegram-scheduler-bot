@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from datetime import date as _date
 from typing import Any
 from zoneinfo import ZoneInfo
-
-import re
-from datetime import date as _date
 
 from telegram import (
     InlineKeyboardButton,
@@ -23,8 +22,8 @@ from telegram import (
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
-    ConversationHandler,
     ContextTypes,
+    ConversationHandler,
     MessageHandler,
     filters,
 )
@@ -40,12 +39,12 @@ logger = logging.getLogger(__name__)
 
 
 def _format_dt(dt: datetime, *, tz_name: str | None = None) -> str:
-    tz = timezone.utc
+    tz = UTC
     if tz_name:
         try:
             tz = ZoneInfo(tz_name)
         except Exception:
-            tz = timezone.utc
+            tz = UTC
     return dt.astimezone(tz).replace(microsecond=0).isoformat()
 
 
@@ -82,9 +81,7 @@ _CB_DEL_ASK = "qv:da"
 _CB_DEL_OK = "qv:do"
 _CB_ALBUM = "qv:al"
 _CB_PIN_DATE = "qv:pd"  # entry point for pin-date conversation
-_CB_CLEAR_PIN = (
-    "qv:cp"  # clear pinned_at — format: qv:cp:{post_id}:{schedule_id}:{offset}
-)
+_CB_CLEAR_PIN = "qv:cp"  # clear pinned_at — format: qv:cp:{post_id}:{schedule_id}:{offset}
 _CB_NOOP = "qv:noop"
 
 
@@ -203,19 +200,19 @@ def _is_native_forward(post: dict[str, Any]) -> bool:
 
 def _format_dt_browser(dt: datetime, *, tz_name: str | None = None) -> str:
     """Format a datetime as 'Mon 28 Mar 2026, 14:00' in the given timezone."""
-    tz = timezone.utc
+    tz = UTC
     if tz_name:
         try:
             tz = ZoneInfo(tz_name)
         except Exception:
-            tz = timezone.utc
+            tz = UTC
     local = dt.astimezone(tz)
     return local.strftime(f"%a {local.day} %b %Y, %H:%M")
 
 
 def _estimate_send_time(schedule: dict[str, Any], offset: int) -> datetime | None:
     """Estimate when the post at the given queue offset will be sent."""
-    cursor = datetime.now(timezone.utc)
+    cursor = datetime.now(UTC)
     try:
         for _ in range(offset + 1):
             cursor = calculate_next_run(schedule, after=cursor)
@@ -228,7 +225,7 @@ def _estimate_completion(schedule: dict[str, Any], count: int) -> datetime | Non
     """Estimate when the last post in a queue of `count` posts will be sent."""
     if count <= 0:
         return None
-    cursor = datetime.now(timezone.utc)
+    cursor = datetime.now(UTC)
     try:
         for _ in range(min(count, 1000)):
             cursor = calculate_next_run(schedule, after=cursor)
@@ -247,17 +244,13 @@ def _queue_nav_keyboard(
     pinned_at: datetime | None = None,
 ) -> InlineKeyboardMarkup:
     prev_btn = (
-        InlineKeyboardButton(
-            "< Prev", callback_data=f"{_CB_GO}:{schedule_id}:{offset - 1}"
-        )
+        InlineKeyboardButton("< Prev", callback_data=f"{_CB_GO}:{schedule_id}:{offset - 1}")
         if offset > 0
         else InlineKeyboardButton("-", callback_data=_CB_NOOP)
     )
     pos_btn = InlineKeyboardButton(f"{offset + 1} / {total}", callback_data=_CB_NOOP)
     next_btn = (
-        InlineKeyboardButton(
-            "Next >", callback_data=f"{_CB_GO}:{schedule_id}:{offset + 1}"
-        )
+        InlineKeyboardButton("Next >", callback_data=f"{_CB_GO}:{schedule_id}:{offset + 1}")
         if offset < total - 1
         else InlineKeyboardButton("-", callback_data=_CB_NOOP)
     )
@@ -405,9 +398,7 @@ async def _build_queue_page(
             album_count = len(json.loads(post.get("media_group_data") or "[]"))
         except Exception:
             album_count = 0
-        type_label = f"album ({album_count} items)" + (
-            " — native forward" if is_forward else ""
-        )
+        type_label = f"album ({album_count} items)" + (" — native forward" if is_forward else "")
     else:
         type_label = media_type + (" — native forward" if is_forward else "")
     segments.append(Segment(f"Type: {type_label}\n"))
@@ -424,15 +415,11 @@ async def _build_queue_page(
 
     if pinned_at is not None:
         segments.append(
-            Segment(
-                f"Pinned to: {_format_dt_browser(pinned_at, tz_name=tz_name)} ({tz_name})"
-            )
+            Segment(f"Pinned to: {_format_dt_browser(pinned_at, tz_name=tz_name)} ({tz_name})")
         )
     elif est_send:
         segments.append(
-            Segment(
-                f"Est. send: {_format_dt_browser(est_send, tz_name=tz_name)} ({tz_name})"
-            )
+            Segment(f"Est. send: {_format_dt_browser(est_send, tz_name=tz_name)} ({tz_name})")
         )
 
     text, entities = render(segments)
@@ -453,9 +440,7 @@ async def _build_queue_page(
     )
 
 
-async def queue_browser_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all qv:* inline keyboard callbacks for the queue browser."""
     query = update.callback_query
     if query is None or update.effective_user is None:
@@ -474,13 +459,11 @@ async def queue_browser_callback(
         try:
             schedule_id = int(parts[2])
             offset = int(parts[3])
-        except (IndexError, ValueError):
+        except IndexError, ValueError:
             await query.edit_message_caption("Navigation error.")
             return
 
-        page = await _build_queue_page(
-            user_id=user_id, schedule_id=schedule_id, offset=offset
-        )
+        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
         if page is None:
             await query.edit_message_caption("Schedule not found or not owned by you.")
             return
@@ -510,7 +493,7 @@ async def queue_browser_callback(
             post_id = int(parts[2])
             schedule_id = int(parts[3])
             offset = int(parts[4])
-        except (IndexError, ValueError):
+        except IndexError, ValueError:
             await query.edit_message_caption("Invalid data.")
             return
 
@@ -519,9 +502,7 @@ async def queue_browser_callback(
             await query.edit_message_caption("Post not found or not owned by you.")
             return
 
-        keyboard = _queue_confirm_keyboard(
-            post_id=post_id, schedule_id=schedule_id, offset=offset
-        )
+        keyboard = _queue_confirm_keyboard(post_id=post_id, schedule_id=schedule_id, offset=offset)
         try:
             # Keep the media visible so the user can see what they are about to delete.
             await query.edit_message_caption(
@@ -537,7 +518,7 @@ async def queue_browser_callback(
             post_id = int(parts[2])
             schedule_id = int(parts[3])
             offset = int(parts[4])
-        except (IndexError, ValueError):
+        except IndexError, ValueError:
             await query.edit_message_caption("Invalid data.")
             return
 
@@ -549,9 +530,7 @@ async def queue_browser_callback(
         await posting.cancel(post_id=post_id, user_id=user_id)
 
         # Stay at the same offset; _build_queue_page clamps it to the new total.
-        page = await _build_queue_page(
-            user_id=user_id, schedule_id=schedule_id, offset=offset
-        )
+        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
         if page is None:
             await query.edit_message_caption("Schedule not found.")
             return
@@ -566,30 +545,25 @@ async def queue_browser_callback(
                 pass
             msg = query.message
             if msg is not None:
-                await context.bot.send_message(
-                    chat_id=msg.chat_id, text="The queue is now empty."
-                )
+                await context.bot.send_message(chat_id=msg.chat_id, text="The queue is now empty.")
+        elif page.file_id and page.file_media_type:
+            input_media = _to_input_media(
+                file_id=page.file_id,
+                media_type=page.file_media_type,
+                caption=page.text,
+                caption_entities=page.entities,
+            )
+            try:
+                await query.edit_message_media(input_media, reply_markup=page.keyboard)
+            except Exception:
+                pass
         else:
-            if page.file_id and page.file_media_type:
-                input_media = _to_input_media(
-                    file_id=page.file_id,
-                    media_type=page.file_media_type,
-                    caption=page.text,
-                    caption_entities=page.entities,
+            try:
+                await query.edit_message_text(
+                    page.text, entities=page.entities, reply_markup=page.keyboard
                 )
-                try:
-                    await query.edit_message_media(
-                        input_media, reply_markup=page.keyboard
-                    )
-                except Exception:
-                    pass
-            else:
-                try:
-                    await query.edit_message_text(
-                        page.text, entities=page.entities, reply_markup=page.keyboard
-                    )
-                except Exception:
-                    pass
+            except Exception:
+                pass
         return
 
     if data.startswith(f"{_CB_CLEAR_PIN}:"):
@@ -597,7 +571,7 @@ async def queue_browser_callback(
             post_id = int(parts[2])
             schedule_id = int(parts[3])
             offset = int(parts[4])
-        except (IndexError, ValueError):
+        except IndexError, ValueError:
             await query.edit_message_caption("Invalid data.")
             return
 
@@ -608,9 +582,7 @@ async def queue_browser_callback(
 
         await posting.unpin(post_id, user_id=user_id)
 
-        page = await _build_queue_page(
-            user_id=user_id, schedule_id=schedule_id, offset=offset
-        )
+        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
         if page is None:
             await query.edit_message_caption("Schedule not found.")
             return
@@ -638,7 +610,7 @@ async def queue_browser_callback(
     if data.startswith(f"{_CB_ALBUM}:"):
         try:
             post_id = int(parts[2])
-        except (IndexError, ValueError):
+        except IndexError, ValueError:
             await query.answer("Invalid data.", show_alert=True)
             return
 
@@ -649,9 +621,7 @@ async def queue_browser_callback(
 
         media_items = _all_media_from_group(post)
         if not media_items:
-            await query.answer(
-                "No displayable media found in this album.", show_alert=True
-            )
+            await query.answer("No displayable media found in this album.", show_alert=True)
             return
 
         msg = query.message
@@ -683,9 +653,7 @@ async def queue_browser_callback(
     logger.warning("Unhandled queue browser callback data: %r", data)
 
 
-async def view_queue_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """View the queue for a schedule as a navigable inline browser."""
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
@@ -706,8 +674,7 @@ async def view_queue_command(
 
     if schedule_id is None:
         await update.message.reply_text(
-            "Usage: /viewqueue [schedule_id]\n"
-            "Tip: use /select to pick a default schedule."
+            "Usage: /viewqueue [schedule_id]\nTip: use /select to pick a default schedule."
         )
         return
 
@@ -761,9 +728,7 @@ async def view_queue_command(
         )
 
 
-async def delete_post_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def delete_post_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Delete a queued post by id."""
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
@@ -803,9 +768,7 @@ async def send_queue_browser(
     """
     page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=0)
     if page is None:
-        await bot.send_message(
-            chat_id=chat_id, text="Schedule not found or not owned by you."
-        )
+        await bot.send_message(chat_id=chat_id, text="Schedule not found or not owned by you.")
         return
 
     if page.file_id and page.file_media_type:
@@ -925,7 +888,7 @@ async def pin_date_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     data = query.data or ""
     try:
         post_id = int(data.split(":")[2])
-    except (IndexError, ValueError):
+    except IndexError, ValueError:
         return ConversationHandler.END
 
     post = await db.get_queued_post_with_owner(post_id)
@@ -962,16 +925,14 @@ async def pin_date_got_date(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         tz = ZoneInfo(user_tz_name)
     except Exception:
-        tz = timezone.utc
+        tz = UTC
 
     now_local = datetime.now(tz).date()
     parsed = _parse_date_input(text, now=now_local)
 
     if parsed is None:
         await update.message.reply_text(
-            "Could not parse that date.\n"
-            "Try: 25/12/2026 or 25 Dec 2026\n"
-            "/cancel to abort."
+            "Could not parse that date.\nTry: 25/12/2026 or 25 Dec 2026\n/cancel to abort."
         )
         return _PIN_WAITING_DATE
 
@@ -1010,14 +971,14 @@ async def pin_date_got_time(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         tz = ZoneInfo(user_tz_name)
     except Exception:
-        tz = timezone.utc
+        tz = UTC
 
     local_dt = datetime(
         pending_date.year, pending_date.month, pending_date.day, hour, minute, tzinfo=tz
     )
-    utc_dt = local_dt.astimezone(timezone.utc)
+    utc_dt = local_dt.astimezone(UTC)
 
-    if utc_dt <= datetime.now(timezone.utc):
+    if utc_dt <= datetime.now(UTC):
         await update.message.reply_text(
             f"{pending_date.strftime('%d %b %Y')} {hour:02d}:{minute:02d} ({user_tz_name}) is in the past.\n"
             "Enter the date again:\n"
@@ -1052,12 +1013,8 @@ async def pin_date_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 pin_date_conversation_handler = ConversationHandler(
     entry_points=[CallbackQueryHandler(pin_date_start, pattern=r"^qv:pd:")],
     states={
-        _PIN_WAITING_DATE: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, pin_date_got_date)
-        ],
-        _PIN_WAITING_TIME: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, pin_date_got_time)
-        ],
+        _PIN_WAITING_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, pin_date_got_date)],
+        _PIN_WAITING_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, pin_date_got_time)],
     },
     fallbacks=[CommandHandler("cancel", pin_date_cancel)],
     per_message=False,

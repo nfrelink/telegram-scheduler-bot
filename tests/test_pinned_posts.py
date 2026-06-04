@@ -9,14 +9,13 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from database import queries as db
 from database.time import parse_timestamp
 from handlers.queue_management import _parse_date_input, _parse_time_input
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -52,16 +51,14 @@ async def test_set_and_clear_post_pinned_at(initialized_db) -> None:
     )
     schedule_id = await _make_schedule(user_id, "001")
 
-    await db.add_queued_posts_bulk(
-        schedule_id, [{"media_type": "photo", "file_id": "x1"}]
-    )
+    await db.add_queued_posts_bulk(schedule_id, [{"media_type": "photo", "file_id": "x1"}])
     posts = await db.get_queued_posts(schedule_id, limit=1)
     post_id = int(posts[0]["id"])
 
     # Initially pinned_at is NULL.
     assert posts[0].get("pinned_at") is None
 
-    target = datetime(2026, 12, 25, 20, 0, 0, tzinfo=timezone.utc)
+    target = datetime(2026, 12, 25, 20, 0, 0, tzinfo=UTC)
     await db.set_post_pinned_at(post_id, target, user_id=user_id)
 
     posts = await db.get_queued_posts(schedule_id, limit=1)
@@ -81,9 +78,7 @@ async def test_get_earliest_pinned_at_returns_none_when_no_pins(initialized_db) 
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
     )
     schedule_id = await _make_schedule(user_id, "002")
-    await db.add_queued_posts_bulk(
-        schedule_id, [{"media_type": "photo", "file_id": "y1"}]
-    )
+    await db.add_queued_posts_bulk(schedule_id, [{"media_type": "photo", "file_id": "y1"}])
 
     result = await db.get_earliest_pinned_at()
     assert result is None
@@ -107,8 +102,8 @@ async def test_get_earliest_pinned_at_returns_min_value(initialized_db) -> None:
     posts = await db.get_queued_posts(schedule_id, limit=2)
     id_a, id_b = int(posts[0]["id"]), int(posts[1]["id"])
 
-    later = datetime(2027, 6, 1, 12, 0, tzinfo=timezone.utc)
-    earlier = datetime(2026, 12, 25, 20, 0, tzinfo=timezone.utc)
+    later = datetime(2027, 6, 1, 12, 0, tzinfo=UTC)
+    earlier = datetime(2026, 12, 25, 20, 0, tzinfo=UTC)
     await db.set_post_pinned_at(id_a, later, user_id=user_id)
     await db.set_post_pinned_at(id_b, earlier, user_id=user_id)
 
@@ -145,10 +140,10 @@ async def test_get_next_queued_post_returns_due_pinned_before_fifo(
     posts = await db.get_queued_posts(schedule_id, limit=10)
     pinned_id = next(p for p in posts if p["file_id"] == "will_be_pinned")["id"]
 
-    past = datetime.now(timezone.utc) - timedelta(hours=1)
+    past = datetime.now(UTC) - timedelta(hours=1)
     await db.set_post_pinned_at(int(pinned_id), past, user_id=user_id)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     next_post = await db.get_next_queued_post(schedule_id, now=now)
     assert next_post is not None
     assert next_post["file_id"] == "will_be_pinned"
@@ -175,10 +170,10 @@ async def test_get_next_queued_post_ignores_future_pinned_and_returns_fifo(
     posts = await db.get_queued_posts(schedule_id, limit=10)
     future_pin_id = next(p for p in posts if p["file_id"] == "future_pin")["id"]
 
-    future = datetime.now(timezone.utc) + timedelta(days=30)
+    future = datetime.now(UTC) + timedelta(days=30)
     await db.set_post_pinned_at(int(future_pin_id), future, user_id=user_id)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     next_post = await db.get_next_queued_post(schedule_id, now=now)
     assert next_post is not None
     assert next_post["file_id"] == "fifo_head"
@@ -206,13 +201,9 @@ async def test_get_next_queued_post_earliest_pinned_wins_when_multiple_due(
     id_later = next(p for p in posts if p["file_id"] == "pin_later")["id"]
     id_earlier = next(p for p in posts if p["file_id"] == "pin_earlier")["id"]
 
-    now = datetime.now(timezone.utc)
-    await db.set_post_pinned_at(
-        int(id_later), now - timedelta(hours=1), user_id=user_id
-    )
-    await db.set_post_pinned_at(
-        int(id_earlier), now - timedelta(hours=2), user_id=user_id
-    )
+    now = datetime.now(UTC)
+    await db.set_post_pinned_at(int(id_later), now - timedelta(hours=1), user_id=user_id)
+    await db.set_post_pinned_at(int(id_earlier), now - timedelta(hours=2), user_id=user_id)
 
     next_post = await db.get_next_queued_post(schedule_id, now=now)
     assert next_post is not None
@@ -244,7 +235,7 @@ async def test_get_queued_posts_unscheduled_excludes_pinned(initialized_db) -> N
     posts = await db.get_queued_posts(schedule_id, limit=10)
     pinned_id = next(p for p in posts if p["file_id"] == "pinned")["id"]
 
-    future = datetime.now(timezone.utc) + timedelta(days=7)
+    future = datetime.now(UTC) + timedelta(days=7)
     await db.set_post_pinned_at(int(pinned_id), future, user_id=user_id)
 
     unscheduled = await db.get_queued_posts_unscheduled(schedule_id, limit=10)

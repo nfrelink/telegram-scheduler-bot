@@ -10,18 +10,19 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from telegram.ext import ConversationHandler
 
 from handlers.bulk_upload import (
     COLLECTING_MEDIA,
     SELECTING_CAPTION_MODE,
     WAITING_SINGLE_CAPTION,
-    _CollectedItem,
     _apply_split_decisions,
+    _CollectedItem,
     _finalize_media_group_items,
     _flush_media_group,
-    _get_posts,
-    _get_media_groups,
     _get_media_group_indexes,
+    _get_media_groups,
+    _get_posts,
     _load_staging_into_user_data,
     _parse_markdownish,
     bulk_collect_media,
@@ -29,8 +30,6 @@ from handlers.bulk_upload import (
     bulk_set_caption_mode,
     bulk_set_single_caption,
 )
-from telegram.ext import ConversationHandler
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -173,9 +172,7 @@ class TestFinalizeMediaGroupItems:
             )
         )
         assert result[0]["caption"] == "shared caption"
-        assert result[0]["caption_entities"] == [
-            {"type": "bold", "offset": 0, "length": 6}
-        ]
+        assert result[0]["caption_entities"] == [{"type": "bold", "offset": 0, "length": 6}]
         assert result[1]["caption"] is None
         assert result[1]["caption_entities"] is None
 
@@ -381,17 +378,13 @@ class TestApplySplitDecisions:
             single_caption=None,
             single_caption_entities=None,
         )
-        assert ctx.user_data["bulk_posts"] == [
-            {"media_type": "photo", "file_id": "solo"}
-        ]
+        assert ctx.user_data["bulk_posts"] == [{"media_type": "photo", "file_id": "solo"}]
 
     def test_mixed_decisions_and_passthrough(self) -> None:
         ctx = _mock_context()
         posts = _get_posts(ctx)
         posts.append({"media_type": "photo", "file_id": "p1"})
-        posts.append(
-            {"media_type": "media_group", "file_id": None, "media_group_data": None}
-        )
+        posts.append({"media_type": "media_group", "file_id": None, "media_group_data": None})
         posts.append({"media_type": "video", "file_id": "v1"})
 
         items = [_make_item(file_id="g1"), _make_item(file_id="g2")]
@@ -852,9 +845,7 @@ class TestBulkConfirmAutoResume:
         return ctx
 
     @staticmethod
-    async def _run(
-        ctx: MagicMock, schedule_state: str
-    ) -> tuple[AsyncMock, AsyncMock, int]:
+    async def _run(ctx: MagicMock, schedule_state: str) -> tuple[AsyncMock, AsyncMock, int]:
         update = _mock_update(text="yes")
         with (
             patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),

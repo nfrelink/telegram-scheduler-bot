@@ -6,7 +6,6 @@ from telegram import MessageEntity
 
 from utils.tg_text import Segment, render, utf16_len
 
-
 # ---------------------------------------------------------------------------
 # utf16_len
 # ---------------------------------------------------------------------------

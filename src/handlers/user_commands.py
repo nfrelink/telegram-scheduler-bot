@@ -8,9 +8,10 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from database import queries as db
+from utils.tg_text import Segment, render
+
 from .common import ensure_user_record
 from .timezone_management import send_timezone_prompt
-from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
 
@@ -133,9 +134,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
         logger.info("Handled /start for user_id=%s", user_id)
     except Exception as e:
-        logger.error(
-            "Error in start_command for user_id=%s: %s", user_id, e, exc_info=True
-        )
+        logger.error("Error in start_command for user_id=%s: %s", user_id, e, exc_info=True)
         await update.message.reply_text("An error occurred. Please try again.")
 
 
@@ -148,9 +147,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     help_text = _help_text()
     details = (
-        await db.get_user_context_details(update.effective_user.id)
-        if update.effective_user
-        else {}
+        await db.get_user_context_details(update.effective_user.id) if update.effective_user else {}
     )
 
     if details.get("telegram_channel_id") or details.get("selected_schedule_id"):
@@ -168,9 +165,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await update.message.reply_text(upload_nudge)
 
 
-async def pending_media_nudge(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def pending_media_nudge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Low-priority fallback: remind user about pending staging when they send
     media outside of any active conversation (e.g. after a bot restart)."""
     if update.effective_user is None or update.message is None:
