@@ -374,7 +374,9 @@ async def _process_schedule(
             return
 
     await rate_limiter.wait_if_needed(telegram_channel_id)
-    ok, error_text = await send_post(bot, telegram_channel_id=telegram_channel_id, post=post)
+    ok, error_text, retryable = await send_post(
+        bot, telegram_channel_id=telegram_channel_id, post=post
+    )
 
     if ok:
         # Compute the next planned slot from `now`, not from the slot we just
@@ -411,6 +413,7 @@ async def _process_schedule(
         owner_user_id=owner_user_id,
         now=now,
         error_text=error_text,
+        retryable=retryable,
     )
 
 
@@ -447,13 +450,14 @@ async def _handle_post_failure(
     owner_user_id: int,
     now: datetime,
     error_text: str | None = None,
+    retryable: bool = True,
 ) -> None:
     post_id = int(post["id"])
     schedule_id = int(post["schedule_id"])
 
     retry_count = int(post.get("retry_count") or 0) + 1
 
-    if retry_count <= MAX_RETRIES:
+    if retryable and retry_count <= MAX_RETRIES:
         delay_minutes = 2**retry_count  # 2, 4, 8
         retry_time = now + timedelta(minutes=delay_minutes)
         await posting.complete_retry(

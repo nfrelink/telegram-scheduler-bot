@@ -638,6 +638,17 @@ async def _show_confirmation_message(
 ) -> int:
     """Send the pre-queue confirmation summary and transition to CONFIRMING."""
     posts = _get_posts(context)
+
+    broken = [i for i, p in enumerate(posts) if p.get("media_type") == "media_group" and not p.get("media_group_data")]
+    if broken:
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        if chat_id:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="Something went wrong preparing your media groups. Please start over with /bulk.",
+            )
+        return ConversationHandler.END
+
     counts: dict[str, int] = {}
     for p in posts:
         counts[p["media_type"]] = counts.get(p["media_type"], 0) + 1

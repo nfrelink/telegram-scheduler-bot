@@ -5,7 +5,7 @@ Each test:
 - invokes _process_schedule with a fixed `now`
 - asserts side effects on DB rows + mocked bot/send_post
 
-`send_post` returns `(ok: bool, error_text: str | None)`; mocks here
+`send_post` returns `(ok: bool, error_text: str | None, retryable: bool)`; mocks here
 return that shape directly.
 """
 
@@ -121,7 +121,7 @@ async def test_invalid_pattern_pauses_and_notifies(initialized_db, monkeypatch) 
         await conn.commit()
     schedule = await _reload(int(schedule["id"]))
 
-    send_mock = AsyncMock(return_value=(True, None))
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
 
     bot = _make_bot()
@@ -146,7 +146,7 @@ async def test_invalid_pattern_pauses_and_notifies(initialized_db, monkeypatch) 
 @pytest.mark.asyncio
 async def test_empty_queue_transitions_to_empty_paused(initialized_db, monkeypatch) -> None:
     schedule = await _mk(8002, "002")
-    send_mock = AsyncMock(return_value=(True, None))
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
 
     bot = _make_bot()
@@ -179,7 +179,7 @@ async def test_pinned_post_fires_when_pinned_at_due(initialized_db, monkeypatch)
     now = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
     await db.set_post_pinned_at(pid, now - timedelta(hours=1), user_id=8003)
 
-    send_mock = AsyncMock(return_value=(True, None))
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -210,7 +210,7 @@ async def test_scheduled_for_in_future_does_not_fire(initialized_db, monkeypatch
     now = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
     await db.bulk_update_posts_scheduled_for([(pid, now + timedelta(minutes=10))])
 
-    send_mock = AsyncMock(return_value=(True, None))
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -233,7 +233,7 @@ async def test_scheduled_for_in_past_fires(initialized_db, monkeypatch) -> None:
     now = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
     await db.bulk_update_posts_scheduled_for([(pid, now - timedelta(minutes=1))])
 
-    send_mock = AsyncMock(return_value=(True, None))
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -263,7 +263,7 @@ async def test_fifo_does_not_fire_when_next_planned_run_in_future(
     await _set_next_planned_run_at(sid, now + timedelta(minutes=5))
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=(True, None))
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -287,7 +287,7 @@ async def test_fifo_fires_when_next_planned_run_at_now_or_past(initialized_db, m
     await _set_next_planned_run_at(sid, now - timedelta(seconds=1))
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=(True, None))
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -335,7 +335,7 @@ async def test_pattern_edit_then_tick_does_not_fire_in_past_slot(
     await _set_next_planned_run_at(sid, next_slot_after_edit)
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=(True, None))
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -361,8 +361,8 @@ async def test_null_npr_on_active_schedule_is_backfilled(initialized_db, monkeyp
     schedule = await _reload(sid)
     assert schedule["next_planned_run_at"] is None
 
-    now = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
-    send_mock = AsyncMock(return_value=(True, None))
+    now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
+    send_mock = AsyncMock(return_value=(True, None, True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -397,7 +397,7 @@ async def test_send_failure_first_retry_schedules_future_attempt(
     await _set_next_planned_run_at(sid, now - timedelta(seconds=1))
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found"))
+    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found", True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -429,7 +429,7 @@ async def test_send_failure_after_max_retries_pauses_schedule(initialized_db, mo
     )
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found"))
+    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found", True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -800,7 +800,7 @@ async def test_send_failure_after_max_retries_dms_admin_with_error(
     )
     schedule = await _reload(sid)
 
-    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found"))
+    send_mock = AsyncMock(return_value=(False, "BadRequest: chat not found", True))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
@@ -824,7 +824,7 @@ async def test_empty_queue_does_not_dm_admin(initialized_db, monkeypatch) -> Non
     monkeypatch.setenv("ADMIN_USER_ID", "9999")
 
     schedule = await _mk(8103, "103")
-    monkeypatch.setattr(engine, "send_post", AsyncMock(return_value=(True, None)))
+    monkeypatch.setattr(engine, "send_post", AsyncMock(return_value=(True, None, True)))
 
     bot = _make_bot()
     now = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
@@ -933,7 +933,7 @@ async def test_post_sent_log_carries_structured_event(initialized_db, monkeypatc
     await _set_next_planned_run_at(sid, now - timedelta(seconds=1))
     schedule = await _reload(sid)
 
-    monkeypatch.setattr(engine, "send_post", AsyncMock(return_value=(True, None)))
+    monkeypatch.setattr(engine, "send_post", AsyncMock(return_value=(True, None, True)))
     bot = _make_bot()
 
     with caplog.at_level("INFO", logger="scheduler.engine"):
@@ -969,7 +969,7 @@ async def test_schedule_paused_send_failure_log_carries_structured_event(
     monkeypatch.setattr(
         engine,
         "send_post",
-        AsyncMock(return_value=(False, "BadRequest: chat not found")),
+        AsyncMock(return_value=(False, "BadRequest: chat not found", True)),
     )
     bot = _make_bot()
 
