@@ -4,21 +4,19 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
 import logging
 import os
 import signal
 import sys
 import warnings
+from contextlib import suppress
 from typing import Final
 
 # The filter must be installed before importing python-telegram-bot
 # (transitively pulled in via `from bot import ...`); otherwise the
 # per_message=False UserWarning fires at import time before the filter is
 # active. The deferred imports below are intentional — do not reorder.
-warnings.filterwarnings(
-    "ignore", message=r".*per_message=False.*", category=UserWarning
-)
+warnings.filterwarnings("ignore", message=r".*per_message=False.*", category=UserWarning)
 
 from dotenv import load_dotenv  # noqa: E402
 

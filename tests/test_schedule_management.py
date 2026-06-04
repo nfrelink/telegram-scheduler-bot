@@ -9,6 +9,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from telegram.ext import ConversationHandler
 
 from handlers.schedule_management import (
     ES_WAIT_DAILY_TIMES,
@@ -29,15 +30,13 @@ from handlers.schedule_management import (
     _pattern_summary,
     editschedule_choose_field,
     editschedule_set_type,
+    newschedule_set_daily_times,
+    newschedule_set_interval,
     newschedule_set_name,
     newschedule_set_type,
-    newschedule_set_interval,
-    newschedule_set_daily_times,
     newschedule_set_weekly_days,
     newschedule_set_weekly_times,
 )
-from telegram.ext import ConversationHandler
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -146,9 +145,7 @@ class TestPatternSummary:
         assert "2h 30m" in s
 
     def test_daily(self) -> None:
-        s = _pattern_summary(
-            {"type": "daily", "times": ["09:00", "16:00"]}, tz_name="CET"
-        )
+        s = _pattern_summary({"type": "daily", "times": ["09:00", "16:00"]}, tz_name="CET")
         assert "daily" in s
         assert "CET" in s
 
@@ -170,9 +167,7 @@ class TestNewScheduleSetName:
     async def test_valid_name_goes_to_wait_type(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="My Schedule")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_name(update, ctx)
         assert result == NS_WAIT_TYPE
         assert ctx.user_data["ns_name"] == "My Schedule"
@@ -181,9 +176,7 @@ class TestNewScheduleSetName:
     async def test_empty_name_stays(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_name(update, ctx)
         assert result == NS_WAIT_NAME
 
@@ -193,9 +186,7 @@ class TestNewScheduleSetType:
     async def test_interval_goes_to_wait_interval(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="interval")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_type(update, ctx)
         assert result == NS_WAIT_INTERVAL
         assert ctx.user_data["ns_type"] == "interval"
@@ -204,9 +195,7 @@ class TestNewScheduleSetType:
     async def test_daily_goes_to_wait_daily_times(self) -> None:
         ctx = _mock_context(ns_timezone="UTC")
         update = _mock_update(text="daily")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_type(update, ctx)
         assert result == NS_WAIT_DAILY_TIMES
 
@@ -214,9 +203,7 @@ class TestNewScheduleSetType:
     async def test_weekly_goes_to_wait_weekly_days(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="weekly")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_type(update, ctx)
         assert result == NS_WAIT_WEEKLY_DAYS
 
@@ -224,9 +211,7 @@ class TestNewScheduleSetType:
     async def test_invalid_type_stays(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="biweekly")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_type(update, ctx)
         assert result == NS_WAIT_TYPE
 
@@ -234,9 +219,7 @@ class TestNewScheduleSetType:
     async def test_case_insensitive(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="DAILY")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_type(update, ctx)
         assert result == NS_WAIT_DAILY_TIMES
 
@@ -246,9 +229,7 @@ class TestNewScheduleSetInterval:
     async def test_valid_interval_finalizes(self) -> None:
         ctx = _mock_context(ns_channel_db_id=1, ns_name="Test", ns_timezone="UTC")
         update = _mock_update(text="2h")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             with patch(
                 "handlers.schedule_management.scheduling.create",
                 new_callable=AsyncMock,
@@ -264,9 +245,7 @@ class TestNewScheduleSetInterval:
     async def test_invalid_interval_stays(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="abc")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_interval(update, ctx)
         assert result == NS_WAIT_INTERVAL
 
@@ -276,9 +255,7 @@ class TestNewScheduleSetDailyTimes:
     async def test_valid_times_finalizes(self) -> None:
         ctx = _mock_context(ns_channel_db_id=1, ns_name="Daily", ns_timezone="UTC")
         update = _mock_update(text="09:00,16:00")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             with patch(
                 "handlers.schedule_management.scheduling.create",
                 new_callable=AsyncMock,
@@ -294,9 +271,7 @@ class TestNewScheduleSetDailyTimes:
     async def test_invalid_times_stays(self) -> None:
         ctx = _mock_context(ns_timezone="UTC")
         update = _mock_update(text="99:99")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_daily_times(update, ctx)
         assert result == NS_WAIT_DAILY_TIMES
 
@@ -306,9 +281,7 @@ class TestNewScheduleSetWeeklyDays:
     async def test_valid_days_goes_to_weekly_times(self) -> None:
         ctx = _mock_context(ns_timezone="UTC")
         update = _mock_update(text="monday,friday")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_weekly_days(update, ctx)
         assert result == NS_WAIT_WEEKLY_TIMES
         assert ctx.user_data["ns_days"] == ["monday", "friday"]
@@ -317,9 +290,7 @@ class TestNewScheduleSetWeeklyDays:
     async def test_invalid_days_stays(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="notaday")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_weekly_days(update, ctx)
         assert result == NS_WAIT_WEEKLY_DAYS
 
@@ -334,9 +305,7 @@ class TestNewScheduleSetWeeklyTimes:
             ns_days=["monday"],
         )
         update = _mock_update(text="12:00")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             with patch(
                 "handlers.schedule_management.scheduling.create",
                 new_callable=AsyncMock,
@@ -352,9 +321,7 @@ class TestNewScheduleSetWeeklyTimes:
     async def test_invalid_times_stays(self) -> None:
         ctx = _mock_context(ns_timezone="UTC")
         update = _mock_update(text="nope")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await newschedule_set_weekly_times(update, ctx)
         assert result == NS_WAIT_WEEKLY_TIMES
 
@@ -369,9 +336,7 @@ class TestEditScheduleChooseField:
     async def test_name_goes_to_wait_name(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="name")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await editschedule_choose_field(update, ctx)
         assert result == ES_WAIT_NAME
 
@@ -379,9 +344,7 @@ class TestEditScheduleChooseField:
     async def test_pattern_goes_to_wait_type(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="pattern")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await editschedule_choose_field(update, ctx)
         assert result == ES_WAIT_TYPE
 
@@ -389,9 +352,7 @@ class TestEditScheduleChooseField:
     async def test_invalid_stays(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="something")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await editschedule_choose_field(update, ctx)
         assert result == ES_WAIT_FIELD
 
@@ -401,9 +362,7 @@ class TestEditScheduleSetType:
     async def test_interval(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="interval")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await editschedule_set_type(update, ctx)
         assert result == ES_WAIT_INTERVAL
 
@@ -411,9 +370,7 @@ class TestEditScheduleSetType:
     async def test_daily(self) -> None:
         ctx = _mock_context(es_timezone="UTC")
         update = _mock_update(text="daily")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await editschedule_set_type(update, ctx)
         assert result == ES_WAIT_DAILY_TIMES
 
@@ -421,9 +378,7 @@ class TestEditScheduleSetType:
     async def test_weekly(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="weekly")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await editschedule_set_type(update, ctx)
         assert result == ES_WAIT_WEEKLY_DAYS
 
@@ -431,8 +386,6 @@ class TestEditScheduleSetType:
     async def test_invalid(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="nope")
-        with patch(
-            "handlers.schedule_management.ensure_user_record", new_callable=AsyncMock
-        ):
+        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
             result = await editschedule_set_type(update, ctx)
         assert result == ES_WAIT_TYPE

@@ -18,9 +18,7 @@ from telegram.ext import ExtBot
 
 logger = logging.getLogger(__name__)
 
-_FILE_ID_ERROR_RE = re.compile(
-    r"(file[_ ]?id|file identifier|wrong file)", re.IGNORECASE
-)
+_FILE_ID_ERROR_RE = re.compile(r"(file[_ ]?id|file identifier|wrong file)", re.IGNORECASE)
 
 # Maps media_type -> (bot method name, media keyword argument name)
 _SINGLE_SEND: dict[str, tuple[str, str]] = {
@@ -197,9 +195,7 @@ async def _send_post_once(
                     message_ids=message_ids,
                 )
                 if len(result) != len(message_ids):
-                    raise RuntimeError(
-                        "forward_messages returned fewer results than requested"
-                    )
+                    raise RuntimeError("forward_messages returned fewer results than requested")
                 return True
 
             with ExitStack() as stack:
@@ -311,9 +307,7 @@ def _parse_media_group(
         caption = item.get("caption")
         caption_parse_mode = item.get("caption_parse_mode")
         caption_entities = item.get("caption_entities")
-        payload = _resolve_file_ref(
-            file_id=item.get("file_id"), file_path=item.get("file_path")
-        )
+        payload = _resolve_file_ref(file_id=item.get("file_id"), file_path=item.get("file_path"))
         if isinstance(payload, Path):
             payload = stack.enter_context(payload.open("rb"))
 
@@ -364,7 +358,7 @@ def _parse_media_group_forward_refs(
             return None
         try:
             pairs.append((int(from_chat_id), int(message_id)))
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
 
     base_from = pairs[0][0]

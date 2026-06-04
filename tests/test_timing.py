@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -37,10 +37,8 @@ def test_validate_schedule_pattern_interval_requires_positive() -> None:
 
 def test_calculate_next_run_interval() -> None:
     schedule = {"pattern": {"type": "interval", "hours": 2}, "timezone": "UTC"}
-    after = datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc)
-    assert calculate_next_run(schedule, after=after) == datetime(
-        2026, 1, 1, 14, 0, tzinfo=timezone.utc
-    )
+    after = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    assert calculate_next_run(schedule, after=after) == datetime(2026, 1, 1, 14, 0, tzinfo=UTC)
 
 
 def test_calculate_next_run_daily_today_future() -> None:
@@ -48,10 +46,8 @@ def test_calculate_next_run_daily_today_future() -> None:
         "pattern": {"type": "daily", "times": ["09:00", "16:00"]},
         "timezone": "UTC",
     }
-    after = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
-    assert calculate_next_run(schedule, after=after) == datetime(
-        2026, 1, 1, 9, 0, tzinfo=timezone.utc
-    )
+    after = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
+    assert calculate_next_run(schedule, after=after) == datetime(2026, 1, 1, 9, 0, tzinfo=UTC)
 
 
 def test_calculate_next_run_daily_rollover() -> None:
@@ -59,10 +55,8 @@ def test_calculate_next_run_daily_rollover() -> None:
         "pattern": {"type": "daily", "times": ["09:00", "16:00"]},
         "timezone": "UTC",
     }
-    after = datetime(2026, 1, 1, 17, 0, tzinfo=timezone.utc)
-    assert calculate_next_run(schedule, after=after) == datetime(
-        2026, 1, 2, 9, 0, tzinfo=timezone.utc
-    )
+    after = datetime(2026, 1, 1, 17, 0, tzinfo=UTC)
+    assert calculate_next_run(schedule, after=after) == datetime(2026, 1, 2, 9, 0, tzinfo=UTC)
 
 
 def test_calculate_next_run_weekly() -> None:
@@ -75,16 +69,12 @@ def test_calculate_next_run_weekly() -> None:
         "timezone": "UTC",
     }
     # Monday 11:00 -> Monday 12:00
-    after = datetime(2024, 1, 1, 11, 0, tzinfo=timezone.utc)  # Monday
-    assert calculate_next_run(schedule, after=after) == datetime(
-        2024, 1, 1, 12, 0, tzinfo=timezone.utc
-    )
+    after = datetime(2024, 1, 1, 11, 0, tzinfo=UTC)  # Monday
+    assert calculate_next_run(schedule, after=after) == datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
 
     # Monday 12:00 (exact) -> Wednesday 12:00 (strictly after)
-    after2 = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
-    assert calculate_next_run(schedule, after=after2) == datetime(
-        2024, 1, 3, 12, 0, tzinfo=timezone.utc
-    )
+    after2 = datetime(2024, 1, 1, 12, 0, tzinfo=UTC)
+    assert calculate_next_run(schedule, after=after2) == datetime(2024, 1, 3, 12, 0, tzinfo=UTC)
 
 
 def test_calculate_next_run_daily_timezone_dst_shift_europe_amsterdam() -> None:
@@ -95,15 +85,15 @@ def test_calculate_next_run_daily_timezone_dst_shift_europe_amsterdam() -> None:
     }
 
     # Before EU DST starts (CET, UTC+1): 09:00 local == 08:00 UTC.
-    after_winter = datetime(2026, 3, 28, 12, 0, tzinfo=timezone.utc)
+    after_winter = datetime(2026, 3, 28, 12, 0, tzinfo=UTC)
     assert calculate_next_run(schedule, after=after_winter) == datetime(
-        2026, 3, 29, 7, 0, tzinfo=timezone.utc
+        2026, 3, 29, 7, 0, tzinfo=UTC
     )
 
     # Before EU DST ends (CEST, UTC+2): next day may be CET again.
-    after_summer = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
+    after_summer = datetime(2026, 10, 24, 12, 0, tzinfo=UTC)
     assert calculate_next_run(schedule, after=after_summer) == datetime(
-        2026, 10, 25, 8, 0, tzinfo=timezone.utc
+        2026, 10, 25, 8, 0, tzinfo=UTC
     )
 
 
@@ -116,10 +106,8 @@ def test_calculate_next_run_daily_dst_gap_is_handled_europe_amsterdam() -> None:
 
     # EU DST start day 2026-03-29: local time jumps 02:00 -> 03:00, so 02:30 doesn't exist.
     # The implementation returns a UTC instant that corresponds to ~03:30 local time.
-    after = datetime(2026, 3, 29, 0, 0, tzinfo=timezone.utc)
-    assert calculate_next_run(schedule, after=after) == datetime(
-        2026, 3, 29, 1, 30, tzinfo=timezone.utc
-    )
+    after = datetime(2026, 3, 29, 0, 0, tzinfo=UTC)
+    assert calculate_next_run(schedule, after=after) == datetime(2026, 3, 29, 1, 30, tzinfo=UTC)
 
 
 def test_validate_custom_is_rejected() -> None:
@@ -129,7 +117,7 @@ def test_validate_custom_is_rejected() -> None:
 
 def test_calculate_next_run_rejects_custom() -> None:
     schedule = {"pattern": {"type": "custom", "cron": "0 */2 * * *"}, "timezone": "UTC"}
-    after = datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+    after = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
     with pytest.raises(ValueError):
         _ = calculate_next_run(schedule, after=after)
 
@@ -147,14 +135,14 @@ from scheduler.timing import _get_timezone  # noqa: E402
 def test_get_timezone_none_falls_back_to_env_or_utc(monkeypatch) -> None:
     """No name → consult DEFAULT_TIMEZONE; fall back to UTC if unset."""
     monkeypatch.delenv("DEFAULT_TIMEZONE", raising=False)
-    assert _get_timezone(None) is timezone.utc
+    assert _get_timezone(None) is UTC
 
 
 def test_get_timezone_explicit_utc_short_circuits() -> None:
     """The string 'UTC' avoids the ZoneInfo lookup so it works even without
     system tzdata installed."""
-    assert _get_timezone("UTC") is timezone.utc
-    assert _get_timezone("etc/utc") is timezone.utc
+    assert _get_timezone("UTC") is UTC
+    assert _get_timezone("etc/utc") is UTC
 
 
 def test_get_timezone_unknown_zone_falls_back_to_utc(caplog) -> None:
@@ -162,10 +150,9 @@ def test_get_timezone_unknown_zone_falls_back_to_utc(caplog) -> None:
 
     with caplog.at_level(logging.WARNING, logger="scheduler.timing"):
         tz = _get_timezone("Mars/Olympus_Mons")
-    assert tz is timezone.utc
+    assert tz is UTC
     assert any(
-        "not found" in rec.message or "Unknown timezone" in rec.message
-        for rec in caplog.records
+        "not found" in rec.message or "Unknown timezone" in rec.message for rec in caplog.records
     )
 
 
@@ -175,7 +162,7 @@ def test_get_timezone_non_string_falls_back_to_utc(caplog) -> None:
 
     with caplog.at_level(logging.WARNING, logger="scheduler.timing"):
         tz = _get_timezone(12345)  # type: ignore[arg-type]
-    assert tz is timezone.utc
+    assert tz is UTC
 
 
 # Validation table — covers every False branch in validate_schedule_pattern.
@@ -199,9 +186,7 @@ def test_get_timezone_non_string_falls_back_to_utc(caplog) -> None:
         ({}, False),  # missing type → unknown
     ],
 )
-def test_validate_schedule_pattern_branch_table(
-    pattern: dict, expected_ok: bool
-) -> None:
+def test_validate_schedule_pattern_branch_table(pattern: dict, expected_ok: bool) -> None:
     ok, _ = validate_schedule_pattern(pattern)
     assert ok is expected_ok
 
@@ -209,7 +194,7 @@ def test_validate_schedule_pattern_branch_table(
 def test_calculate_next_run_uses_now_when_after_omitted() -> None:
     """When `after` is None, now() is used; the result must be > the call moment."""
     schedule = {"pattern": {"type": "interval", "minutes": 1}, "timezone": "UTC"}
-    before = datetime.now(timezone.utc)
+    before = datetime.now(UTC)
     out = calculate_next_run(schedule)
     assert out > before
 
@@ -219,7 +204,7 @@ def test_calculate_next_run_promotes_naive_after_to_utc() -> None:
     naive = datetime(2026, 4, 20, 12, 0)
     schedule = {"pattern": {"type": "interval", "minutes": 5}, "timezone": "UTC"}
     out = calculate_next_run(schedule, after=naive)
-    assert out == datetime(2026, 4, 20, 12, 5, tzinfo=timezone.utc)
+    assert out == datetime(2026, 4, 20, 12, 5, tzinfo=UTC)
 
 
 def test_calculate_next_run_raises_on_invalid_pattern() -> None:
@@ -227,7 +212,7 @@ def test_calculate_next_run_raises_on_invalid_pattern() -> None:
     engine catches to pause the schedule."""
     schedule = {"pattern": {"type": "daily", "times": []}, "timezone": "UTC"}
     with pytest.raises(ValueError):
-        calculate_next_run(schedule, after=datetime(2026, 1, 1, tzinfo=timezone.utc))
+        calculate_next_run(schedule, after=datetime(2026, 1, 1, tzinfo=UTC))
 
 
 def test_calculate_next_run_weekly_jumps_across_week_boundary() -> None:
@@ -238,8 +223,8 @@ def test_calculate_next_run_weekly_jumps_across_week_boundary() -> None:
         "timezone": "UTC",
     }
     # 2026-04-25 is a Saturday.
-    saturday = datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    saturday = datetime(2026, 4, 25, 12, 0, tzinfo=UTC)
     out = calculate_next_run(schedule, after=saturday)
     # Next Friday = 2026-05-01 09:00 UTC.
-    assert out == datetime(2026, 5, 1, 9, 0, tzinfo=timezone.utc)
+    assert out == datetime(2026, 5, 1, 9, 0, tzinfo=UTC)
     assert out - saturday < timedelta(days=14)

@@ -20,7 +20,7 @@ def _add_src_to_path() -> None:
 
 async def _verify() -> None:
     from database import init_database
-    from database.connection import get_db, get_database_path
+    from database.connection import get_database_path, get_db
 
     await init_database()
 

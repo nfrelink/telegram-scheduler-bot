@@ -22,8 +22,8 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timezone
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 from telegram.ext import ExtBot
 
@@ -112,7 +112,7 @@ def format_message(event: str, lines: Sequence[tuple[str, object]]) -> str:
     payload can't be rejected by the Bot API and turn the notification
     itself into a silent error.
     """
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now_utc = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     body_lines = [f"Event: {event} ({now_utc} UTC)"]
     for label, value in lines:
         body_lines.append(f"- {label}: {value}")

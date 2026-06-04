@@ -9,7 +9,6 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from database import queries as db
-
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
@@ -18,9 +17,7 @@ logger = logging.getLogger(__name__)
 _CODE_CANDIDATE_RE = re.compile(r"[A-Za-z0-9_-]{15,64}")
 
 
-async def channel_post_handler(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def channel_post_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Detect posted verification codes in channels and complete verification."""
     message = update.channel_post
     if message is None:
@@ -39,9 +36,7 @@ async def channel_post_handler(
     matched_user_id: int | None = None
     matched_code: str | None = None
     for candidate in candidates[:10]:
-        user_id = await db.verify_code(
-            code=candidate, telegram_channel_id=telegram_channel_id
-        )
+        user_id = await db.verify_code(code=candidate, telegram_channel_id=telegram_channel_id)
         if user_id is not None:
             matched_user_id = int(user_id)
             matched_code = candidate
@@ -106,9 +101,7 @@ async def channel_post_handler(
             telegram_channel_id,
             e,
         )
-        deletion_msg = (
-            "Please delete the verification message from the channel manually."
-        )
+        deletion_msg = "Please delete the verification message from the channel manually."
 
     schedules = await db.get_channel_schedules(channel_db_id)
     if schedules:

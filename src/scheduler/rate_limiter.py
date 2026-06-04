@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +20,7 @@ class RateLimiter:
     async def wait_if_needed(self, telegram_channel_id: str) -> None:
         """Wait if posting too quickly to the same channel."""
         last = self._last_post_at.get(telegram_channel_id)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if last is not None:
             elapsed = (now - last).total_seconds()
             if elapsed < self._min_interval_seconds:
@@ -32,4 +32,4 @@ class RateLimiter:
                 )
                 await asyncio.sleep(wait_time)
 
-        self._last_post_at[telegram_channel_id] = datetime.now(timezone.utc)
+        self._last_post_at[telegram_channel_id] = datetime.now(UTC)

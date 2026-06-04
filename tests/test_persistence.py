@@ -18,7 +18,6 @@ from persistence import (
     build_persistence,
 )
 
-
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -198,7 +197,7 @@ async def test_atomic_write_temp_file_uses_pid_suffix(
     seen: list[Path] = []
     real_replace = os.replace
 
-    def _capture_replace(src, dst):  # noqa: ANN001
+    def _capture_replace(src, dst):
         seen.append(Path(src))
         return real_replace(src, dst)
 
@@ -308,6 +307,4 @@ def test_create_application_starts_when_pickle_is_corrupt(
     # ValueError still fired, create_application would have raised before
     # adding most of these.
     total_handlers = sum(len(group) for group in application.handlers.values())
-    assert total_handlers >= 15, (
-        f"unexpectedly few handlers registered: {total_handlers}"
-    )
+    assert total_handlers >= 15, f"unexpectedly few handlers registered: {total_handlers}"

@@ -65,9 +65,7 @@ async def should_check(*, channel_db_id: int, user_id: int) -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def find_by_file_unique_id(
-    channel_db_id: int, file_unique_id: str
-) -> dict[str, Any] | None:
+async def find_by_file_unique_id(channel_db_id: int, file_unique_id: str) -> dict[str, Any] | None:
     """Layer 1: exact file_unique_id hit. Cheapest possible check; works
     for every media type (photo / video / document / etc)."""
     return await db.find_fingerprint_by_file_unique_id(channel_db_id, file_unique_id)

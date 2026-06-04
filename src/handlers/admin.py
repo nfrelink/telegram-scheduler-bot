@@ -7,7 +7,7 @@ import functools
 import logging
 import os
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from telegram import Message, MessageEntity, Update
 from telegram.ext import ContextTypes
@@ -103,16 +103,14 @@ def admin_only(func):  # type: ignore[no-untyped-def]
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ensure_user_record(update, context)
         if update.message is None:
-            return
+            return None
         if not _is_admin(update):
-            await update.message.reply_text(
-                "This command is restricted to the bot administrator."
-            )
+            await update.message.reply_text("This command is restricted to the bot administrator.")
             logger.warning(
                 "Unauthorized admin command attempt by user_id=%s",
                 update.effective_user.id if update.effective_user else None,
             )
-            return
+            return None
         return await func(update, context)
 
     return wrapper
@@ -126,7 +124,7 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     stats = await db.get_system_stats()
     schedule_states = await db.get_schedule_state_counts()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     active_since = now - timedelta(days=90)
     active_users = await db.get_active_user_count(since=active_since)
 
@@ -157,7 +155,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.message is None:
         return
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     active_since = now - timedelta(days=90)
 
     active_users = await db.get_active_user_count(since=active_since)
@@ -192,12 +190,11 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     payload_text, payload_entities = _extract_command_payload(update.message)
     if not payload_text:
         await update.message.reply_text(
-            "Usage: /broadcast <message>\n"
-            "Sends a message to users active in the last 90 days."
+            "Usage: /broadcast <message>\nSends a message to users active in the last 90 days."
         )
         return
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     since = now - timedelta(days=90)
     users = await db.get_active_users(since=since)
 
@@ -218,11 +215,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             ok += 1
         except Exception as e:
             failed += 1
-            logger.error(
-                "Broadcast failed for user_id=%s: %s", user_id, e, exc_info=True
-            )
+            logger.error("Broadcast failed for user_id=%s: %s", user_id, e, exc_info=True)
         await asyncio.sleep(0.1)
 
-    await update.message.reply_text(
-        f"Broadcast complete. Success: {ok}. Failed: {failed}."
-    )
+    await update.message.reply_text(f"Broadcast complete. Success: {ok}. Failed: {failed}.")

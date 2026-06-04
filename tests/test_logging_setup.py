@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -55,13 +55,11 @@ def test_json_format_required_fields_present() -> None:
     # ts must be a parseable ISO 8601 timestamp in UTC
     ts = datetime.fromisoformat(payload["ts"])
     assert ts.tzinfo is not None
-    assert ts.utcoffset() == timezone.utc.utcoffset(ts)
+    assert ts.utcoffset() == UTC.utcoffset(ts)
 
 
 def test_extra_keys_promoted_to_top_level() -> None:
-    record = _make_record(
-        extra={"event": "post_sent", "schedule_id": 17, "post_id": 42}
-    )
+    record = _make_record(extra={"event": "post_sent", "schedule_id": 17, "post_id": 42})
     payload = _format(record)
     assert payload["event"] == "post_sent"
     assert payload["schedule_id"] == 17
@@ -98,7 +96,7 @@ def test_reserved_record_attrs_not_emitted() -> None:
 
 
 def test_extra_datetime_serialised_as_iso() -> None:
-    when = datetime(2026, 4, 20, 12, 34, 56, tzinfo=timezone.utc)
+    when = datetime(2026, 4, 20, 12, 34, 56, tzinfo=UTC)
     record = _make_record(extra={"next_planned_run_at": when})
     payload = _format(record)
     assert payload["next_planned_run_at"] == "2026-04-20T12:34:56+00:00"
@@ -233,9 +231,7 @@ def test_setup_logging_default_emits_json(
     assert payload["message"] == "hi"
 
 
-def test_setup_logging_text_mode(
-    monkeypatch: pytest.MonkeyPatch, _restore_root_logging
-) -> None:
+def test_setup_logging_text_mode(monkeypatch: pytest.MonkeyPatch, _restore_root_logging) -> None:
     monkeypatch.setenv("LOG_FORMAT", "text")
     setup_logging()
     buf, _ = _capture_stream()
