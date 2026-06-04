@@ -639,7 +639,11 @@ async def _show_confirmation_message(
     """Send the pre-queue confirmation summary and transition to CONFIRMING."""
     posts = _get_posts(context)
 
-    broken = [i for i, p in enumerate(posts) if p.get("media_type") == "media_group" and not p.get("media_group_data")]
+    broken = [
+        i
+        for i, p in enumerate(posts)
+        if p.get("media_type") == "media_group" and not p.get("media_group_data")
+    ]
     if broken:
         chat_id = update.effective_chat.id if update.effective_chat else None
         if chat_id:

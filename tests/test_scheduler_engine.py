@@ -361,8 +361,8 @@ async def test_null_npr_on_active_schedule_is_backfilled(initialized_db, monkeyp
     schedule = await _reload(sid)
     assert schedule["next_planned_run_at"] is None
 
-    now = datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
-    send_mock = AsyncMock(return_value=(True, None, True))
+    now = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
+    send_mock = AsyncMock(return_value=(True, None))
     monkeypatch.setattr(engine, "send_post", send_mock)
     bot = _make_bot()
 
