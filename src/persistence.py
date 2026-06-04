@@ -30,7 +30,7 @@ import logging
 import os
 import pickle
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from telegram._bot import Bot
 from telegram.ext import BasePersistence, PersistenceInput, PicklePersistence
@@ -64,7 +64,7 @@ class _ValidatingUnpickler(pickle.Unpickler):
     only asking "does this file parse end-to-end" — so the sentinel is fine.
     """
 
-    def persistent_load(self, pid: object) -> object:  # noqa: ARG002 - signature required
+    def persistent_load(self, pid: object) -> object:
         return None
 
 
@@ -141,11 +141,9 @@ class _AtomicPicklePersistence(PicklePersistence):
         # Including the pid in the suffix makes concurrent writes from
         # different processes (e.g. pytest workers, accidental double-start)
         # collide on rename rather than on the temp file itself.
-        from telegram.ext._picklepersistence import _BotPickler  # noqa: PLC0415
+        from telegram.ext._picklepersistence import _BotPickler
 
-        tmp_path = self.filepath.with_suffix(
-            self.filepath.suffix + f".{os.getpid()}.tmp"
-        )
+        tmp_path = self.filepath.with_suffix(self.filepath.suffix + f".{os.getpid()}.tmp")
         try:
             with tmp_path.open("wb") as file:
                 _BotPickler(self.bot, file, protocol=pickle.HIGHEST_PROTOCOL).dump(data)
@@ -203,7 +201,7 @@ class _NoopPersistence(BasePersistence):
             update_interval=_FLUSH_INTERVAL_SECONDS,
         )
 
-    def set_bot(self, bot: Bot) -> None:  # noqa: D401
+    def set_bot(self, bot: Bot) -> None:
         # Skip BasePersistence.set_bot's ExtBot check: we never store
         # callback_data so the check is moot, and we never need a bot
         # reference because we never serialise anything.
@@ -218,45 +216,45 @@ class _NoopPersistence(BasePersistence):
     async def get_bot_data(self) -> dict[str, Any]:
         return {}
 
-    async def get_callback_data(self) -> Optional[CDCData]:
+    async def get_callback_data(self) -> CDCData | None:
         return None
 
-    async def get_conversations(self, name: str) -> ConversationDict:  # noqa: ARG002
+    async def get_conversations(self, name: str) -> ConversationDict:
         return {}
 
     async def update_conversation(
         self,
         name: str,
         key: ConversationKey,
-        new_state: Optional[object],  # noqa: ARG002
+        new_state: object | None,
     ) -> None:
         return None
 
-    async def update_user_data(self, user_id: int, data: Any) -> None:  # noqa: ARG002
+    async def update_user_data(self, user_id: int, data: Any) -> None:
         return None
 
-    async def update_chat_data(self, chat_id: int, data: Any) -> None:  # noqa: ARG002
+    async def update_chat_data(self, chat_id: int, data: Any) -> None:
         return None
 
-    async def update_bot_data(self, data: Any) -> None:  # noqa: ARG002
+    async def update_bot_data(self, data: Any) -> None:
         return None
 
-    async def update_callback_data(self, data: CDCData) -> None:  # noqa: ARG002
+    async def update_callback_data(self, data: CDCData) -> None:
         return None
 
-    async def drop_chat_data(self, chat_id: int) -> None:  # noqa: ARG002
+    async def drop_chat_data(self, chat_id: int) -> None:
         return None
 
-    async def drop_user_data(self, user_id: int) -> None:  # noqa: ARG002
+    async def drop_user_data(self, user_id: int) -> None:
         return None
 
-    async def refresh_user_data(self, user_id: int, user_data: Any) -> None:  # noqa: ARG002
+    async def refresh_user_data(self, user_id: int, user_data: Any) -> None:
         return None
 
-    async def refresh_chat_data(self, chat_id: int, chat_data: Any) -> None:  # noqa: ARG002
+    async def refresh_chat_data(self, chat_id: int, chat_data: Any) -> None:
         return None
 
-    async def refresh_bot_data(self, bot_data: Any) -> None:  # noqa: ARG002
+    async def refresh_bot_data(self, bot_data: Any) -> None:
         return None
 
     async def flush(self) -> None:
@@ -283,8 +281,7 @@ def build_persistence() -> BasePersistence:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
         logger.exception(
-            "Could not create persistence directory %s; starting with a "
-            "no-op persistence instead.",
+            "Could not create persistence directory %s; starting with a no-op persistence instead.",
             path.parent,
             extra={
                 "event": "persistence_directory_failed",

@@ -62,16 +62,10 @@ async def _channels_keyboard(user_id: int) -> tuple[str, InlineKeyboardMarkup | 
     rows = []
     for ch in channels:
         ch_id = int(ch["id"])
-        name = str(
-            ch.get("channel_name")
-            or ch.get("telegram_channel_id")
-            or f"Channel {ch_id}"
-        )
+        name = str(ch.get("channel_name") or ch.get("telegram_channel_id") or f"Channel {ch_id}")
         count = await db.get_channel_queue_count(ch_id)
         label = f"{name}  ({count} queued)" if count else name
-        rows.append(
-            [InlineKeyboardButton(label, callback_data=f"{_CB_CHANNEL}{ch_id}")]
-        )
+        rows.append([InlineKeyboardButton(label, callback_data=f"{_CB_CHANNEL}{ch_id}")])
 
     return "Select a channel:", InlineKeyboardMarkup(rows)
 
@@ -92,13 +86,7 @@ async def _schedules_keyboard(
         state = _state_label.get(str(s.get("state") or ""), str(s.get("state") or ""))
         count = await db.get_queue_count(s_id)
         label = f"{name}  •  {state}  •  {count} queued"
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    label, callback_data=f"{_CB_SET}{channel_db_id}:{s_id}"
-                )
-            ]
-        )
+        rows.append([InlineKeyboardButton(label, callback_data=f"{_CB_SET}{channel_db_id}:{s_id}")])
 
     rows.append([InlineKeyboardButton("< Back", callback_data=_CB_BACK)])
     return "Select a schedule:", InlineKeyboardMarkup(rows)
@@ -198,9 +186,7 @@ async def select_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         channel_name = details.get("channel_name") or f"Channel {channel_db_id}"
         schedule_name = details.get("schedule_name") or f"Schedule {schedule_id}"
         try:
-            await query.edit_message_text(
-                f"Selected: {channel_name} / {schedule_name}."
-            )
+            await query.edit_message_text(f"Selected: {channel_name} / {schedule_name}.")
         except Exception:
             pass
         logger.info(

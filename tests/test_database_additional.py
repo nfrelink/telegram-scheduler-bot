@@ -95,12 +95,8 @@ async def test_get_user_channels_returns_all_channels_for_user(initialized_db) -
 
 @pytest.mark.asyncio
 async def test_get_user_channels_only_returns_own_channels(initialized_db) -> None:
-    await db.upsert_user(
-        user_id=8005, username="u", first_name="f", last_name="l", is_admin=False
-    )
-    await db.upsert_user(
-        user_id=8006, username="u", first_name="f", last_name="l", is_admin=False
-    )
+    await db.upsert_user(user_id=8005, username="u", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(user_id=8006, username="u", first_name="f", last_name="l", is_admin=False)
     await db.create_channel(
         user_id=8005, telegram_channel_id="-80051", channel_name="User A channel"
     )
@@ -174,9 +170,7 @@ async def test_get_channel_queue_count_aggregates_across_schedules(
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
     )
-    ch = await db.create_channel(
-        user_id=user_id, telegram_channel_id="-8010", channel_name="C"
-    )
+    ch = await db.create_channel(user_id=user_id, telegram_channel_id="-8010", channel_name="C")
     channel_id = int(ch["id"])
 
     s1 = await db.create_schedule(
@@ -196,9 +190,7 @@ async def test_get_channel_queue_count_aggregates_across_schedules(
 
     assert await db.get_channel_queue_count(channel_id) == 0
 
-    await db.add_queued_posts_bulk(
-        int(s1["id"]), [{"media_type": "photo", "file_id": "x"}]
-    )
+    await db.add_queued_posts_bulk(int(s1["id"]), [{"media_type": "photo", "file_id": "x"}])
     await db.add_queued_posts_bulk(
         int(s2["id"]),
         [
@@ -219,9 +211,7 @@ async def test_get_channel_queue_count_aggregates_across_schedules(
 async def test_get_queued_post_with_owner_returns_correct_owner(initialized_db) -> None:
     user_id = 8011
     ch, schedule, _ = await _make_schedule(user_id)
-    await db.add_queued_posts_bulk(
-        int(schedule["id"]), [{"media_type": "photo", "file_id": "z"}]
-    )
+    await db.add_queued_posts_bulk(int(schedule["id"]), [{"media_type": "photo", "file_id": "z"}])
 
     posts = await db.get_queued_posts(int(schedule["id"]), limit=1)
     post_id = int(posts[0]["id"])

@@ -22,7 +22,7 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 # `LogRecord` attributes set by the logging module itself. Anything not in
@@ -119,7 +119,7 @@ class JsonFormatter(logging.Formatter):
         message = _redact(record.getMessage())
 
         payload: dict[str, Any] = {
-            "ts": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname.lower(),
             "logger": record.name,
         }
@@ -183,9 +183,7 @@ def setup_logging() -> None:
     handler = logging.StreamHandler(sys.stdout)
     if log_format == "text":
         handler.setFormatter(
-            _RedactingTextFormatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
+            _RedactingTextFormatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         )
     else:
         handler.setFormatter(JsonFormatter())

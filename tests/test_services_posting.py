@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from database import queries as db
 from database.time import parse_timestamp
 from services import posting
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures
@@ -21,9 +20,7 @@ async def _seed_user_channel_schedule(user_id: int, *, tg_id: str = "-1099"):
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
     )
-    channel = await db.create_channel(
-        user_id=user_id, telegram_channel_id=tg_id, channel_name="C"
-    )
+    channel = await db.create_channel(user_id=user_id, telegram_channel_id=tg_id, channel_name="C")
     schedule = await db.create_schedule(
         channel_db_id=int(channel["id"]),
         name="S",
@@ -35,9 +32,7 @@ async def _seed_user_channel_schedule(user_id: int, *, tg_id: str = "-1099"):
 
 
 async def _today_stats() -> dict[str, int]:
-    return await db.get_delivery_stats_sum_since(
-        since_day=datetime.now(timezone.utc).date()
-    )
+    return await db.get_delivery_stats_sum_since(since_day=datetime.now(UTC).date())
 
 
 # ---------------------------------------------------------------------------
@@ -114,10 +109,8 @@ async def test_enqueue_bulk_skips_fingerprints_when_none(initialized_db) -> None
 async def test_pin_and_unpin_roundtrip(initialized_db) -> None:
     user_id = 8004
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-8004")
-    _, ids = await db.add_queued_posts_bulk(
-        sid, [{"media_type": "photo", "file_id": "k"}]
-    )
-    when = datetime.now(timezone.utc) + timedelta(hours=1)
+    _, ids = await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "k"}])
+    when = datetime.now(UTC) + timedelta(hours=1)
     await posting.pin(ids[0], pinned_at=when, user_id=user_id)
     post = (await db.get_queued_posts(sid, limit=1))[0]
     assert parse_timestamp(post["pinned_at"]) is not None
@@ -137,10 +130,8 @@ async def test_bulk_set_scheduled_for_applies_to_all_ids(initialized_db) -> None
             {"media_type": "photo", "file_id": "b"},
         ],
     )
-    base = datetime.now(timezone.utc) + timedelta(seconds=30)
-    await posting.bulk_set_scheduled_for(
-        [(ids[0], base), (ids[1], base + timedelta(seconds=15))]
-    )
+    base = datetime.now(UTC) + timedelta(seconds=30)
+    await posting.bulk_set_scheduled_for([(ids[0], base), (ids[1], base + timedelta(seconds=15))])
     posts = await db.get_queued_posts(sid, limit=10)
     assert all(parse_timestamp(p["scheduled_for"]) is not None for p in posts)
 
@@ -178,12 +169,12 @@ async def test_complete_send_applies_all_writes(initialized_db) -> None:
     assert sched_before["last_run_at"] is None
     assert sched_before["next_planned_run_at"] is None
 
-    next_planned = datetime.now(timezone.utc) + timedelta(minutes=30)
+    next_planned = datetime.now(UTC) + timedelta(minutes=30)
     await posting.complete_send(
         post_id=post_ids[0],
         schedule_id=sid,
         owner_user_id=user_id,
-        day=datetime.now(timezone.utc).date(),
+        day=datetime.now(UTC).date(),
         next_planned_run_at=next_planned,
     )
 
@@ -206,9 +197,7 @@ async def test_complete_send_applies_all_writes(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_complete_send_rolls_back_on_inner_failure(
-    initialized_db, monkeypatch
-) -> None:
+async def test_complete_send_rolls_back_on_inner_failure(initialized_db, monkeypatch) -> None:
     """If any in-tx step raises, all preceding writes in the orchestrator
     must be rolled back. We force the last step
     (update_schedule_next_planned_run) to raise and assert that earlier steps
@@ -243,8 +232,8 @@ async def test_complete_send_rolls_back_on_inner_failure(
             post_id=post_ids[0],
             schedule_id=sid,
             owner_user_id=user_id,
-            day=datetime.now(timezone.utc).date(),
-            next_planned_run_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+            day=datetime.now(UTC).date(),
+            next_planned_run_at=datetime.now(UTC) + timedelta(minutes=30),
         )
 
     stats_after = await _today_stats()
@@ -272,13 +261,13 @@ async def test_complete_retry_increments_failures_and_updates_post(
         [{"media_type": "photo", "file_id": "z1"}],
     )
     stats_before = await _today_stats()
-    retry_time = datetime.now(timezone.utc) + timedelta(minutes=4)
+    retry_time = datetime.now(UTC) + timedelta(minutes=4)
 
     await posting.complete_retry(
         post_id=post_ids[0],
         retry_count=2,
         scheduled_for=retry_time,
-        day=datetime.now(timezone.utc).date(),
+        day=datetime.now(UTC).date(),
     )
 
     stats_after = await _today_stats()
@@ -298,7 +287,7 @@ async def test_complete_failure_pause_pauses_schedule(initialized_db) -> None:
     await posting.complete_failure_pause(
         schedule_id=sid,
         owner_user_id=user_id,
-        day=datetime.now(timezone.utc).date(),
+        day=datetime.now(UTC).date(),
     )
 
     stats_after = await _today_stats()
@@ -350,9 +339,7 @@ async def test_cancel_removes_post_and_unposted_fingerprints(initialized_db) -> 
 
 
 @pytest.mark.asyncio
-async def test_cancel_rolls_back_fingerprint_delete_on_failure(
-    initialized_db, monkeypatch
-) -> None:
+async def test_cancel_rolls_back_fingerprint_delete_on_failure(initialized_db, monkeypatch) -> None:
     """If the queued-post delete step raises, the fingerprint deletion executed
     earlier in the same transaction must be rolled back."""
     user_id = 9006

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from database import transaction
 from database import queries as db
+from database import transaction
 from database.connection import get_db
 from database.time import parse_timestamp, to_sqlite_timestamp
 
@@ -112,9 +112,7 @@ async def test_forward_origin_allowlist_roundtrip(initialized_db) -> None:
 
     await db.add_forward_origin_allowlist(user_id=user_id, origin_chat_id=-1001)
     await db.add_forward_origin_allowlist(user_id=user_id, origin_chat_id=-1002)
-    await db.add_forward_origin_allowlist(
-        user_id=user_id, origin_chat_id=-1002
-    )  # idempotent
+    await db.add_forward_origin_allowlist(user_id=user_id, origin_chat_id=-1002)  # idempotent
 
     assert await db.get_forward_origin_allowlist(user_id) == [-1002, -1001]
 
@@ -154,7 +152,7 @@ async def test_scheduled_for_helpers_and_earliest(initialized_db) -> None:
     posts = await db.get_queued_posts(schedule_id, limit=10)
     assert len(posts) == 3
 
-    base = datetime.now(timezone.utc).replace(microsecond=0)
+    base = datetime.now(UTC).replace(microsecond=0)
     t1 = base + timedelta(seconds=30)
     t2 = base + timedelta(seconds=10)
     t3 = base + timedelta(seconds=20)
@@ -179,16 +177,12 @@ async def test_scheduled_for_helpers_and_earliest(initialized_db) -> None:
 
 @pytest.mark.asyncio
 async def test_active_users_and_delivery_stats_daily(initialized_db) -> None:
-    now = datetime.now(timezone.utc).replace(microsecond=0)
+    now = datetime.now(UTC).replace(microsecond=0)
     old = now - timedelta(days=120)
 
     # Create two users; only one is active since 90 days.
-    await db.upsert_user(
-        user_id=1, username="u1", first_name="f", last_name="l", is_admin=False
-    )
-    await db.upsert_user(
-        user_id=2, username="u2", first_name="f", last_name="l", is_admin=False
-    )
+    await db.upsert_user(user_id=1, username="u1", first_name="f", last_name="l", is_admin=False)
+    await db.upsert_user(user_id=2, username="u2", first_name="f", last_name="l", is_admin=False)
 
     # Force user 2 to look inactive by pushing last_active_at back.
     async with transaction() as conn:
@@ -205,12 +199,8 @@ async def test_active_users_and_delivery_stats_daily(initialized_db) -> None:
 
     # Delivery stats: today increments and sums.
     today = now.date()
-    await db.increment_delivery_stats_daily(
-        day=today, posts_sent_delta=2, send_failures_delta=1
-    )
-    await db.increment_delivery_stats_daily(
-        day=today, posts_sent_delta=1, send_failures_delta=0
-    )
+    await db.increment_delivery_stats_daily(day=today, posts_sent_delta=2, send_failures_delta=1)
+    await db.increment_delivery_stats_daily(day=today, posts_sent_delta=1, send_failures_delta=0)
 
     summed = await db.get_delivery_stats_sum_since(since_day=today)
     assert summed["posts_sent"] == 3
@@ -285,9 +275,7 @@ async def test_bulk_staging_session_lifecycle(initialized_db) -> None:
     assert session["caption_mode"] == "remove"
     assert session["single_caption"] is None
 
-    await db.update_bulk_session_caption(
-        user_id, caption_mode="single", single_caption="hello"
-    )
+    await db.update_bulk_session_caption(user_id, caption_mode="single", single_caption="hello")
     session2 = await db.get_bulk_session(user_id)
     assert session2["caption_mode"] == "single"
     assert session2["single_caption"] == "hello"
@@ -306,12 +294,8 @@ async def test_bulk_staging_items_lifecycle(initialized_db) -> None:
     assert await db.get_staging_count(user_id) == 0
 
     await db.add_staging_item(user_id, media_type="photo", file_id="fid1")
-    await db.add_staging_item(
-        user_id, media_type="video", file_id="fid2", media_group_id="mg1"
-    )
-    await db.add_staging_item(
-        user_id, media_type="photo", file_id="fid3", media_group_id="mg1"
-    )
+    await db.add_staging_item(user_id, media_type="video", file_id="fid2", media_group_id="mg1")
+    await db.add_staging_item(user_id, media_type="photo", file_id="fid3", media_group_id="mg1")
 
     assert await db.get_staging_count(user_id) == 3
 
@@ -542,9 +526,7 @@ async def test_bulk_staging_items_preserve_all_fields(initialized_db) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _mk_schedule_for_count(
-    user_id: int, suffix: str, *, state: str = "active"
-) -> int:
+async def _mk_schedule_for_count(user_id: int, suffix: str, *, state: str = "active") -> int:
     """Smallest path to a real schedule row; returns its id."""
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -621,4 +603,4 @@ async def test_get_latest_active_schedule_run_at_returns_max_across_active(
 
     latest = await db.get_latest_active_schedule_run_at()
     assert latest is not None
-    assert latest == datetime(2026, 4, 20, 12, 0, tzinfo=timezone.utc)
+    assert latest == datetime(2026, 4, 20, 12, 0, tzinfo=UTC)

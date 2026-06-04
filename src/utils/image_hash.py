@@ -28,9 +28,7 @@ async def compute_dhash(bot, file_id: str, *, size: int = DHASH_DEFAULT_SIZE) ->
     try:
         tg_file = await bot.get_file(file_id)
     except TimedOut:
-        tg_file = await bot.get_file(
-            file_id, read_timeout=DHASH_GETFILE_RETRY_READ_TIMEOUT
-        )
+        tg_file = await bot.get_file(file_id, read_timeout=DHASH_GETFILE_RETRY_READ_TIMEOUT)
     raw = await tg_file.download_as_bytearray()
     img = Image.open(io.BytesIO(raw)).convert("L").resize((size + 1, size))
     pixels = list(img.get_flattened_data())

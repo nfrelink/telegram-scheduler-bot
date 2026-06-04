@@ -21,7 +21,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Source roots
 # ---------------------------------------------------------------------------
@@ -87,9 +86,7 @@ _FORBIDDEN_DEDUP: frozenset[str] = frozenset(
     }
 )
 
-_FORBIDDEN: frozenset[str] = (
-    _FORBIDDEN_SCHEDULING | _FORBIDDEN_POSTING | _FORBIDDEN_DEDUP
-)
+_FORBIDDEN: frozenset[str] = _FORBIDDEN_SCHEDULING | _FORBIDDEN_POSTING | _FORBIDDEN_DEDUP
 
 
 # Match `db.<sym>` and `queries.<sym>`; the scan ignores text inside string
@@ -116,9 +113,7 @@ def test_no_direct_db_calls_to_service_owned_symbols(root: Path) -> None:
         text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), start=1):
             if _CALL_PATTERN.search(line):
-                offenders.append(
-                    (str(path.relative_to(_PROJECT_ROOT)), lineno, line.strip())
-                )
+                offenders.append((str(path.relative_to(_PROJECT_ROOT)), lineno, line.strip()))
 
     if offenders:
         rendered = "\n".join(f"  {p}:{ln}: {src}" for p, ln, src in offenders)

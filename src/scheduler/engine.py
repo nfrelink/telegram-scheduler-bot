@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from telegram.ext import ExtBot
 
@@ -74,7 +74,7 @@ async def start_scheduler(bot: ExtBot) -> None:  # pragma: no cover
 
 async def _get_sleep_seconds(default_seconds: int) -> float:
     """Choose a sleep interval, respecting upcoming scheduled_for and pinned_at times."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     earliest: datetime | None = None
 
     for getter in (db.get_earliest_scheduled_for, db.get_earliest_pinned_at):
@@ -118,7 +118,7 @@ async def _catch_up_missed_posts() -> None:
     we still backfill `next_planned_run_at` if it was NULL, to satisfy the tick's
     invariant.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     schedules = await db.get_active_schedules()
 
     total_scheduled = 0
@@ -158,18 +158,14 @@ async def _catch_up_missed_posts() -> None:
             if missed <= 0:
                 continue
 
-            candidates = await db.get_queued_posts_unscheduled(
-                schedule_id, limit=missed
-            )
+            candidates = await db.get_queued_posts_unscheduled(schedule_id, limit=missed)
             if not candidates:
                 continue
 
             updates: list[tuple[int, datetime]] = []
             for i, post in enumerate(candidates[:missed]):
                 post_id = int(post["id"])
-                updates.append(
-                    (post_id, now + timedelta(seconds=CATCHUP_SPACING_SECONDS * i))
-                )
+                updates.append((post_id, now + timedelta(seconds=CATCHUP_SPACING_SECONDS * i)))
 
             await posting.bulk_set_scheduled_for(updates)
             total_scheduled += len(updates)
@@ -226,7 +222,7 @@ def _catchup_cursor(schedule: dict[str, Any], *, now: datetime) -> datetime | No
 
 
 async def _process_due_schedules(bot: ExtBot, *, rate_limiter: RateLimiter) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     schedules = await db.get_active_schedules()
 
     for schedule in schedules:
@@ -421,17 +417,13 @@ async def _process_schedule(
     )
 
 
-async def _handle_empty_queue(
-    bot: ExtBot, *, schedule: dict[str, Any], owner_user_id: int
-) -> None:
+async def _handle_empty_queue(bot: ExtBot, *, schedule: dict[str, Any], owner_user_id: int) -> None:
     schedule_id = int(schedule["id"])
 
     # Avoid spamming: transition to empty_paused.
     await scheduling.mark_empty(schedule_id, user_id=owner_user_id)
 
-    channel_name = (
-        schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
-    )
+    channel_name = schedule.get("channel_name") or schedule.get("telegram_channel_id") or "channel"
     schedule_name = schedule.get("name") or f"Schedule {schedule_id}"
 
     await _notify_user(

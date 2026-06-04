@@ -199,9 +199,7 @@ def test_format_message_truncates_to_telegram_limit() -> None:
 def test_format_message_renders_label_value_pairs_in_order() -> None:
     """Stable ordering matters: tests that pin the expected payload
     shouldn't be flaky based on dict iteration order."""
-    msg = notifications.format_message(
-        "evt", [("first", 1), ("second", 2), ("third", 3)]
-    )
+    msg = notifications.format_message("evt", [("first", 1), ("second", 2), ("third", 3)])
     body = msg.splitlines()
     assert body[0].startswith("Event: evt (")
     assert body[1] == "- first: 1"

@@ -14,7 +14,7 @@ invariants.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from database import queries as db
@@ -87,16 +87,14 @@ def next_planned_for(schedule: dict[str, Any], *, after: datetime) -> datetime |
 # ---------------------------------------------------------------------------
 
 
-async def recompute_next_run(
-    schedule_id: int, *, now: datetime | None = None
-) -> datetime | None:
+async def recompute_next_run(schedule_id: int, *, now: datetime | None = None) -> datetime | None:
     """Recompute and persist `schedules.next_planned_run_at` for one schedule.
 
     Idempotent: safe to call after any state-changing op. Returns the new
     value (or None when cleared).
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
     schedule = await db.get_schedule(schedule_id)
     if schedule is None:
@@ -146,9 +144,7 @@ async def create(
     )
 
 
-async def update_pattern(
-    schedule_id: int, pattern: dict[str, Any], *, user_id: int
-) -> None:
+async def update_pattern(schedule_id: int, pattern: dict[str, Any], *, user_id: int) -> None:
     """Persist a new pattern and recompute NPR.
 
     Recomputing pins NPR to the first pattern slot strictly after now, so
@@ -159,9 +155,7 @@ async def update_pattern(
     await recompute_next_run(schedule_id)
 
 
-async def update_timezone(
-    schedule_id: int, *, timezone_name: str, user_id: int
-) -> None:
+async def update_timezone(schedule_id: int, *, timezone_name: str, user_id: int) -> None:
     """Persist a new timezone and recompute NPR.
 
     Timezone changes can move daily/weekly slots; recompute pins NPR to the
@@ -171,9 +165,7 @@ async def update_timezone(
     IANA name; the exception carries close-match suggestions.
     """
     _validate_timezone(timezone_name)
-    await db.update_schedule_timezone(
-        schedule_id, timezone_name=timezone_name, user_id=user_id
-    )
+    await db.update_schedule_timezone(schedule_id, timezone_name=timezone_name, user_id=user_id)
     await recompute_next_run(schedule_id)
 
 

@@ -19,10 +19,7 @@ class InvalidTimezoneError(ValueError):
         self.name = name
         self.suggestions: list[str] = list(suggestions) if suggestions else []
         if self.suggestions:
-            msg = (
-                f"Unknown timezone: {name!r}. "
-                f"Did you mean: {', '.join(self.suggestions)}?"
-            )
+            msg = f"Unknown timezone: {name!r}. Did you mean: {', '.join(self.suggestions)}?"
         else:
             msg = (
                 f"Unknown timezone: {name!r}. "

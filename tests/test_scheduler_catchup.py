@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -39,7 +39,7 @@ async def test_catch_up_sets_scheduled_for_with_spacing(initialized_db) -> None:
     )
 
     # Force created_at far enough in the past to guarantee missed runs (cap is 20).
-    past = (datetime.now(timezone.utc) - timedelta(hours=30)).replace(microsecond=0)
+    past = (datetime.now(UTC) - timedelta(hours=30)).replace(microsecond=0)
     past_str = past.strftime("%Y-%m-%d %H:%M:%S")
 
     async with get_db() as conn:

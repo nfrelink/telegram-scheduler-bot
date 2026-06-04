@@ -111,15 +111,11 @@ async def complete_send(
     the rest.
     """
     async with transaction() as conn:
-        await db._increment_delivery_stats_daily_in_tx(
-            conn, day=day, posts_sent_delta=1
-        )
+        await db._increment_delivery_stats_daily_in_tx(conn, day=day, posts_sent_delta=1)
         await db._mark_fingerprint_posted_in_tx(conn, post_id)
         await db._delete_queued_post_in_tx(conn, post_id, user_id=owner_user_id)
         await db._update_schedule_last_run_in_tx(conn, schedule_id)
-        await db._update_schedule_next_planned_run_in_tx(
-            conn, schedule_id, next_planned_run_at
-        )
+        await db._update_schedule_next_planned_run_in_tx(conn, schedule_id, next_planned_run_at)
 
 
 async def complete_retry(
@@ -131,9 +127,7 @@ async def complete_retry(
 ) -> None:
     """Atomically record a delivery failure and reschedule for retry."""
     async with transaction() as conn:
-        await db._increment_delivery_stats_daily_in_tx(
-            conn, day=day, send_failures_delta=1
-        )
+        await db._increment_delivery_stats_daily_in_tx(conn, day=day, send_failures_delta=1)
         await db._update_post_retry_in_tx(
             conn, post_id, retry_count=retry_count, scheduled_for=scheduled_for
         )
@@ -153,12 +147,8 @@ async def complete_failure_pause(
     separate recompute is needed.
     """
     async with transaction() as conn:
-        await db._increment_delivery_stats_daily_in_tx(
-            conn, day=day, send_failures_delta=1
-        )
-        await db._update_schedule_state_in_tx(
-            conn, schedule_id, "paused", user_id=owner_user_id
-        )
+        await db._increment_delivery_stats_daily_in_tx(conn, day=day, send_failures_delta=1)
+        await db._update_schedule_state_in_tx(conn, schedule_id, "paused", user_id=owner_user_id)
 
 
 async def cancel(*, post_id: int, user_id: int) -> None:

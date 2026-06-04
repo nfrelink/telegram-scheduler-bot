@@ -113,16 +113,8 @@ def _regions_keyboard() -> InlineKeyboardMarkup:
     """Return the top-level region selection keyboard."""
     rows = []
     for key, (label, _) in _REGIONS.items():
-        rows.append(
-            [InlineKeyboardButton(label, callback_data=f"{_CB_REGION_PREFIX}{key}")]
-        )
-    rows.append(
-        [
-            InlineKeyboardButton(
-                "Enter manually (/settimezone)", callback_data=_CB_MANUAL
-            )
-        ]
-    )
+        rows.append([InlineKeyboardButton(label, callback_data=f"{_CB_REGION_PREFIX}{key}")])
+    rows.append([InlineKeyboardButton("Enter manually (/settimezone)", callback_data=_CB_MANUAL)])
     return InlineKeyboardMarkup(rows)
 
 
@@ -135,21 +127,13 @@ def _region_keyboard(region_key: str) -> InlineKeyboardMarkup | None:
     # Two buttons per row.
     pair: list[InlineKeyboardButton] = []
     for label, iana in timezones:
-        pair.append(
-            InlineKeyboardButton(label, callback_data=f"{_CB_SET_PREFIX}{iana}")
-        )
+        pair.append(InlineKeyboardButton(label, callback_data=f"{_CB_SET_PREFIX}{iana}"))
         if len(pair) == 2:
             rows.append(pair)
             pair = []
     if pair:
         rows.append(pair)
-    rows.append(
-        [
-            InlineKeyboardButton(
-                "Enter manually (/settimezone)", callback_data=_CB_MANUAL
-            )
-        ]
-    )
+    rows.append([InlineKeyboardButton("Enter manually (/settimezone)", callback_data=_CB_MANUAL)])
     rows.append([InlineKeyboardButton("< Back", callback_data=_CB_REGIONS)])
     return InlineKeyboardMarkup(rows)
 
@@ -184,9 +168,7 @@ async def timezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
 
-async def gettimezone_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def gettimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show the user's configured timezone (or default)."""
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
@@ -211,9 +193,7 @@ async def gettimezone_command(
     await update.message.reply_text(text)
 
 
-async def settimezone_command(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def settimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set the user's timezone by IANA name (power-user text command)."""
     await ensure_user_record(update, context)
     if update.message is None or update.effective_user is None:
@@ -233,9 +213,7 @@ async def settimezone_command(
     if lowered in {"default", "clear", "reset"}:
         await db.set_user_timezone(update.effective_user.id, None)
         effective = default_timezone_name()
-        await update.message.reply_text(
-            f"Timezone cleared. Using default: {effective}."
-        )
+        await update.message.reply_text(f"Timezone cleared. Using default: {effective}.")
         return
 
     if not is_valid_timezone(raw):
@@ -244,8 +222,7 @@ async def settimezone_command(
 
     await db.set_user_timezone(update.effective_user.id, raw)
     await update.message.reply_text(
-        f"Timezone set to {raw}.\n"
-        f"This will be used as the default timezone for new schedules."
+        f"Timezone set to {raw}.\nThis will be used as the default timezone for new schedules."
     )
     logger.info("User %s set timezone to %r", update.effective_user.id, raw)
 

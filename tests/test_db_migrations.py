@@ -41,9 +41,7 @@ async def test_init_database_migrates_legacy_users_table_without_data_loss(
         cols = [r[1] for r in await cur.fetchall()]
         assert "timezone" in cols
 
-        cur2 = await conn.execute(
-            "SELECT id, username, timezone FROM users WHERE id = 123"
-        )
+        cur2 = await conn.execute("SELECT id, username, timezone FROM users WHERE id = 123")
         row = await cur2.fetchone()
         assert row is not None
         assert int(row["id"]) == 123

@@ -55,9 +55,7 @@ async def _channels_list_text_and_keyboard(
         rows: list[list[InlineKeyboardButton]] = []
         for ch in channels:
             ch_id = int(ch["id"])
-            name = str(
-                ch.get("channel_name") or ch.get("channel_id") or f"Channel {ch_id}"
-            )
+            name = str(ch.get("channel_name") or ch.get("channel_id") or f"Channel {ch_id}")
             count = await db.get_channel_queue_count(ch_id)
             label = f"{name}  ({count} queued)" if count else name
             rows.append(
@@ -106,9 +104,7 @@ async def _run_add_flow(
         return
 
     telegram_channel_id = str(chat.id)
-    channel_name = chat.title or (
-        f"@{chat.username}" if chat.username else telegram_channel_id
-    )
+    channel_name = chat.title or (f"@{chat.username}" if chat.username else telegram_channel_id)
 
     existing = await db.get_channel_by_telegram_id(telegram_channel_id)
     if existing is not None and int(existing["user_id"]) == user_id:
@@ -166,19 +162,13 @@ async def _run_add_flow(
         f"{code}\n\n"
         "The bot will detect it automatically. The code expires in 10 minutes."
     )
-    logger.info(
-        "User %s: issued verification code for channel %s", user_id, telegram_channel_id
-    )
+    logger.info("User %s: issued verification code for channel %s", user_id, telegram_channel_id)
 
 
 async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """/channels — show the channel list with action buttons."""
     await ensure_user_record(update, context)
-    if (
-        update.message is None
-        or update.effective_user is None
-        or update.effective_chat is None
-    ):
+    if update.message is None or update.effective_user is None or update.effective_chat is None:
         return ConversationHandler.END
 
     text, keyboard = await _channels_list_text_and_keyboard(update.effective_user.id)
@@ -238,9 +228,7 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [
-                            InlineKeyboardButton(
-                                "Yes, remove", callback_data=f"ch:rmok:{ch_id}"
-                            ),
+                            InlineKeyboardButton("Yes, remove", callback_data=f"ch:rmok:{ch_id}"),
                             InlineKeyboardButton("Cancel", callback_data="ch:back"),
                         ]
                     ]
@@ -284,9 +272,7 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return _SHOWING
 
 
-async def channels_add_handler(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> int:
+async def channels_add_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle the user's text channel ID, @handle, or forwarded message during AWAITING_ADD."""
     msg = update.message
     if msg is None or update.effective_user is None:

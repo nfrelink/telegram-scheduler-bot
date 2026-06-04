@@ -15,8 +15,8 @@ from telegram.ext import (
 )
 
 from handlers.admin import broadcast_command, debug_command, stats_command
-from handlers.channel_management import channels_conversation_handler
 from handlers.bulk_upload import bulk_upload_conversation_handler
+from handlers.channel_management import channels_conversation_handler
 from handlers.duplicate_detection import duplicates_conversation_handler
 from handlers.forwarding import forward_conversation_handler
 from handlers.queue_management import (
@@ -119,9 +119,7 @@ async def error_handler(update: object, context) -> None:  # type: ignore[no-unt
 
     err = context.error
     error_type = type(err).__name__ if err is not None else "UnknownError"
-    error_message = (
-        str(err).strip() if err is not None else ""
-    ) or "(no error message)"
+    error_message = (str(err).strip() if err is not None else "") or "(no error message)"
 
     await notifications.notify_admin(
         context.bot,
@@ -144,9 +142,7 @@ def create_application() -> Application:
     if not token:
         raise RuntimeError("TELEGRAM_BOT_TOKEN not set")
 
-    application = (
-        Application.builder().token(token).persistence(build_persistence()).build()
-    )
+    application = Application.builder().token(token).persistence(build_persistence()).build()
 
     # Core user commands
     application.add_handler(CommandHandler("start", start_command))
@@ -180,9 +176,7 @@ def create_application() -> Application:
     # Pin-date conversation must be registered before the general qv: handler
     # so its qv:pd:* entry point takes priority.
     application.add_handler(pin_date_conversation_handler)
-    application.add_handler(
-        CallbackQueryHandler(queue_browser_callback, pattern=r"^qv:")
-    )
+    application.add_handler(CallbackQueryHandler(queue_browser_callback, pattern=r"^qv:"))
 
     # Channel posts: verification code detection
     application.add_handler(
@@ -201,8 +195,7 @@ def create_application() -> Application:
     # send media outside of any active conversation (e.g. after a bot restart).
     application.add_handler(
         MessageHandler(
-            filters.ChatType.PRIVATE
-            & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
+            filters.ChatType.PRIVATE & (filters.PHOTO | filters.VIDEO | filters.Document.ALL),
             pending_media_nudge,
         ),
         group=99,
