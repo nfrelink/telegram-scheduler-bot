@@ -207,4 +207,3 @@ For issues or questions, please open an issue on GitHub.
 ---
 
 **Note**: This bot is designed for personal use with a small number of channels. For high-volume or commercial use, additional optimizations and infrastructure may be needed.
-
