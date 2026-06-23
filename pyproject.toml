@@ -1,5 +1,27 @@
-# Tooling configuration only. Packaging still goes via requirements*.txt for now.
+[project]
+name = "telegram-scheduler-bot"
+version = "0.1.0"
+description = "A Telegram bot for scheduling posts to multiple channels with flexible scheduling options."
+requires-python = ">=3.14"
+dependencies = []
 
+[dependency-groups]
+dev = [
+    "pyright",
+    "ruff",
+    "pre-commit",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+# ---------------------------------------------------------------------------
+# Ruff: linting + formatting
+# ---------------------------------------------------------------------------
 [tool.ruff]
 line-length = 100
 target-version = "py314"
@@ -7,48 +29,60 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = [
-    "E", "W", "F", "I", "N", "UP", "B", "A", "C4", "C90",
-    "SIM", "RUF", "PL", "TRY", "PTH", "LOG", "G", "T20",
-    "RET", "ARG", "DTZ", "S",
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (undefined names, unused imports)
+    "I",    # import sorting
+    "N",    # naming conventions
+    "UP",   # modernize syntax to target version
+    "B",    # common bug patterns
+    "A",    # shadowing builtins
+    "C4",   # comprehension improvements
+    "C90",  # complexity (KISS tripwire)
+    "SIM",  # simplification opportunities
+    "RUF",  # ruff-specific rules
+    "PL",   # pylint rules (too many branches/statements/returns)
+    "TRY",  # exception handling antipatterns
+    "PTH",  # force pathlib over os.path
+    "LOG",  # logging module misuse
+    "G",    # logging format strings
+    "T20",  # forbid print() outside designated places
+    "RET",  # return statement cleanups
+    "ARG",  # unused function arguments
+    "DTZ",  # naive datetime misuse
+    "S",    # security checks (bandit)
 ]
 ignore = [
-    "PLR0913",  # too many arguments
-    "TRY003",   # long exception messages
-
-    # --- TRANSITION BLOCK: legacy debt, remove one rule at a time ---
-    # Each rule below has existing violations in the codebase. New code
-    # should still follow them. Delete a line here, run `ruff check .`,
-    # fix what it finds, commit. Repeat until the block is empty.
-    "S110",     # try-except-pass (45) — review: should at least log
-    "SIM105",   # suppressible-exception (41)
-    "E501",     # line-too-long (23)
-    "PLC0415",  # import-outside-top-level (18)
-    "C901",     # complex functions (15) — split when next touched
-    "SIM117",   # nested with-statements (14)
-    "PLR2004",  # magic value comparisons (13)
-    "PLR0911",  # too many returns (12)
-    "G201",     # logging .error(exc_info) instead of .exception (11)
-    "TRY300",   # return inside try (7)
-    "PLR0912",  # too many branches (7)
-    "RUF059",   # unused unpacked variable (6)
-    "TRY400",   # logging.error instead of .exception (4)
-    "PLR0915",  # too many statements (4)
-    "SIM103",   # needless bool (3)
-    # Long tail, 1-2 findings each. Cheap wins: delete a line, fix, commit.
-    "TRY301", "S310", "S101", "RET504", "DTZ007", "ARG005", "ARG002",
-    "TRY004", "T20", "SIM108", "S112", "RUF003", "PTH105", "DTZ001",
-    "C408", "B905", "ARG001",
+    "PLR0913",  # too many arguments: sometimes unavoidable
+    "TRY003",   # long exception messages: fine for small projects
 ]
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
 
 [tool.ruff.lint.per-file-ignores]
-"src/handlers/**" = ["ARG001"]      # python-telegram-bot dictates handler signatures
-"tests/**" = ["S101", "PLR2004", "ARG001", "ARG002"]
-"scripts/**" = ["T201"]             # CLI scripts may print
+"tests/**" = [
+    "S101",     # assert is the whole point of pytest
+    "PLR2004",  # magic values in assertions are fine
+]
 
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------------------------------------------------------------------------
+# Pyright: strict type checking
+# ---------------------------------------------------------------------------
 [tool.pyright]
 pythonVersion = "3.14"
-typeCheckingMode = "standard"
-include = ["src"]
+typeCheckingMode = "strict"
+reportMissingTypeStubs = false
+include = ["src", "tests"]
+venvPath = "."
+venv = ".venv"
+
+# ---------------------------------------------------------------------------
+# Pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,5 +1,5 @@
-# One-time: pip install pre-commit (or: uv tool install pre-commit)
-# Then in the repo: pre-commit install
+# Run `uv run pre-commit install` once after cloning/creating the repo.
+# Run `uv run pre-commit autoupdate` occasionally to bump hook versions.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -17,3 +17,12 @@ repos:
       - id: ruff-check
         args: [--fix]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
