@@ -26,7 +26,7 @@ async def _mk_channel(user_id: int, suffix: str) -> int:
 
 
 @pytest.mark.asyncio
-async def test_channel_scanning_toggle_roundtrip(initialized_db) -> None:
+async def test_channel_scanning_toggle_roundtrip(_initialized_db) -> None:
     user_id = 7500
     ch_id = await _mk_channel(user_id, "500")
     assert await dedup.is_channel_scanning_enabled(ch_id) is False
@@ -37,7 +37,7 @@ async def test_channel_scanning_toggle_roundtrip(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_alerts_toggle_roundtrip(initialized_db) -> None:
+async def test_user_alerts_toggle_roundtrip(_initialized_db) -> None:
     user_id = 7501
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -50,7 +50,7 @@ async def test_user_alerts_toggle_roundtrip(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_should_check_requires_both_toggles(initialized_db) -> None:
+async def test_should_check_requires_both_toggles(_initialized_db) -> None:
     """Either gate alone disables the entire check; both must be on."""
     user_id = 7502
     ch_id = await _mk_channel(user_id, "502")
@@ -73,7 +73,7 @@ async def test_should_check_requires_both_toggles(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_find_by_file_unique_id_hits_and_misses(initialized_db) -> None:
+async def test_find_by_file_unique_id_hits_and_misses(_initialized_db) -> None:
     user_id = 7503
     ch_id = await _mk_channel(user_id, "503")
     await db.add_fingerprints_bulk(
@@ -96,7 +96,7 @@ async def test_find_by_file_unique_id_hits_and_misses(initialized_db) -> None:
 
 @pytest.mark.asyncio
 async def test_find_by_dhash_returns_match_when_within_threshold(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     user_id = 7504
     ch_id = await _mk_channel(user_id, "504")
@@ -119,7 +119,7 @@ async def test_find_by_dhash_returns_match_when_within_threshold(
 
 
 @pytest.mark.asyncio
-async def test_find_by_dhash_returns_none_when_no_candidates(initialized_db) -> None:
+async def test_find_by_dhash_returns_none_when_no_candidates(_initialized_db) -> None:
     user_id = 7505
     ch_id = await _mk_channel(user_id, "505")
     # No fingerprints stored → find_similar gets empty list → returns None.
@@ -128,7 +128,7 @@ async def test_find_by_dhash_returns_none_when_no_candidates(initialized_db) -> 
 
 
 @pytest.mark.asyncio
-async def test_find_by_dhash_returns_none_when_above_threshold(initialized_db) -> None:
+async def test_find_by_dhash_returns_none_when_above_threshold(_initialized_db) -> None:
     """A stored dhash that differs in every bit must not match."""
     user_id = 7506
     ch_id = await _mk_channel(user_id, "506")

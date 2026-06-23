@@ -91,7 +91,7 @@ def test_next_planned_for_invalid_pattern_returns_none(caplog) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recompute_active_schedule_writes_npr(initialized_db) -> None:
+async def test_recompute_active_schedule_writes_npr(_initialized_db) -> None:
     sid = await _mk_schedule(7300, "300", pattern={"type": "interval", "minutes": 30})
     now = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
     out = await scheduling.recompute_next_run(sid, now=now)
@@ -101,7 +101,7 @@ async def test_recompute_active_schedule_writes_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recompute_paused_schedule_clears_npr(initialized_db) -> None:
+async def test_recompute_paused_schedule_clears_npr(_initialized_db) -> None:
     """Non-active schedules end up with NPR = NULL regardless of any prior value."""
     sid = await _mk_schedule(
         7301, "301", pattern={"type": "interval", "minutes": 30}, state="paused"
@@ -116,13 +116,13 @@ async def test_recompute_paused_schedule_clears_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_recompute_missing_schedule_returns_none(initialized_db) -> None:
+async def test_recompute_missing_schedule_returns_none(_initialized_db) -> None:
     out = await scheduling.recompute_next_run(999_999)
     assert out is None
 
 
 @pytest.mark.asyncio
-async def test_recompute_invalid_pattern_clears_npr(initialized_db) -> None:
+async def test_recompute_invalid_pattern_clears_npr(_initialized_db) -> None:
     """An active schedule with a corrupted pattern (bypassing validation) must
     not crash recompute; NPR is cleared so the engine's next tick can pause it."""
     sid = await _mk_schedule(7302, "302", pattern={"type": "interval", "minutes": 30})
@@ -140,7 +140,7 @@ async def test_recompute_invalid_pattern_clears_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_persist_next_run_writes_value(initialized_db) -> None:
+async def test_persist_next_run_writes_value(_initialized_db) -> None:
     sid = await _mk_schedule(7303, "303", pattern={"type": "interval", "minutes": 30})
     when = datetime(2026, 4, 20, 13, 0, tzinfo=UTC)
     await scheduling.persist_next_run(sid, when)
@@ -154,7 +154,7 @@ async def test_persist_next_run_writes_value(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_defaults_to_paused_with_null_npr(initialized_db) -> None:
+async def test_create_defaults_to_paused_with_null_npr(_initialized_db) -> None:
     user_id = 7400
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -171,7 +171,7 @@ async def test_create_defaults_to_paused_with_null_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pause_clears_npr(initialized_db) -> None:
+async def test_pause_clears_npr(_initialized_db) -> None:
     user_id = 7401
     sid = await _mk_schedule(user_id, "401", pattern={"type": "interval", "minutes": 5})
     await db.update_schedule_next_planned_run(sid, datetime(2026, 4, 20, 12, 0, tzinfo=UTC))
@@ -182,7 +182,7 @@ async def test_pause_clears_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_resume_recomputes_npr(initialized_db) -> None:
+async def test_resume_recomputes_npr(_initialized_db) -> None:
     user_id = 7402
     sid = await _mk_schedule(
         user_id, "402", pattern={"type": "interval", "minutes": 5}, state="paused"
@@ -196,7 +196,7 @@ async def test_resume_recomputes_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_pattern_recomputes_npr(initialized_db) -> None:
+async def test_update_pattern_recomputes_npr(_initialized_db) -> None:
     """The 23:48-edit-then-tick scenario: editing the pattern must move NPR
     to a future slot so the next tick does not fire a back-dated time."""
     user_id = 7403
@@ -217,7 +217,7 @@ async def test_update_pattern_recomputes_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_timezone_recomputes_npr(initialized_db) -> None:
+async def test_update_timezone_recomputes_npr(_initialized_db) -> None:
     user_id = 7404
     sid = await _mk_schedule(user_id, "404", pattern={"type": "daily", "times": ["12:00"]})
     await scheduling.update_timezone(sid, timezone_name="America/New_York", user_id=user_id)
@@ -227,7 +227,7 @@ async def test_update_timezone_recomputes_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_name_does_not_touch_npr(initialized_db) -> None:
+async def test_update_name_does_not_touch_npr(_initialized_db) -> None:
     user_id = 7405
     sid = await _mk_schedule(user_id, "405", pattern={"type": "interval", "minutes": 5})
     when = datetime(2026, 4, 20, 12, 0, tzinfo=UTC)
@@ -239,7 +239,7 @@ async def test_update_name_does_not_touch_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_mark_empty_clears_npr(initialized_db) -> None:
+async def test_mark_empty_clears_npr(_initialized_db) -> None:
     user_id = 7406
     sid = await _mk_schedule(user_id, "406", pattern={"type": "interval", "minutes": 5})
     await db.update_schedule_next_planned_run(sid, datetime(2026, 4, 20, 12, 0, tzinfo=UTC))
@@ -250,7 +250,7 @@ async def test_mark_empty_clears_npr(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_removes_schedule(initialized_db) -> None:
+async def test_delete_removes_schedule(_initialized_db) -> None:
     user_id = 7407
     sid = await _mk_schedule(user_id, "407", pattern={"type": "interval", "minutes": 5})
     await scheduling.delete(sid, user_id=user_id)
@@ -263,7 +263,7 @@ async def test_delete_removes_schedule(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_rejects_invalid_timezone(initialized_db) -> None:
+async def test_create_rejects_invalid_timezone(_initialized_db) -> None:
     """Handlers validate first, but the service is the source of truth. A
     handler-bypassing caller must not be able to write an invalid tz."""
     user_id = 7500
@@ -292,7 +292,7 @@ async def test_create_rejects_invalid_timezone(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_accepts_canonical_utc(initialized_db) -> None:
+async def test_create_accepts_canonical_utc(_initialized_db) -> None:
     """UTC must survive validation even on systems without tzdata; this
     pins the `utils.tz.is_valid_timezone` UTC short-circuit at the service
     boundary."""
@@ -311,7 +311,7 @@ async def test_create_accepts_canonical_utc(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_timezone_rejects_invalid_timezone(initialized_db) -> None:
+async def test_update_timezone_rejects_invalid_timezone(_initialized_db) -> None:
     user_id = 7502
     sid = await _mk_schedule(user_id, "502", pattern={"type": "daily", "times": ["12:00"]})
 
@@ -325,7 +325,7 @@ async def test_update_timezone_rejects_invalid_timezone(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_timezone_exception_carries_suggestions(initialized_db) -> None:
+async def test_update_timezone_exception_carries_suggestions(_initialized_db) -> None:
     """A close typo produces an actionable error the handler can forward
     verbatim."""
     user_id = 7503

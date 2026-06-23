@@ -41,7 +41,7 @@ async def _today_stats() -> dict[str, int]:
 
 
 @pytest.mark.asyncio
-async def test_enqueue_bulk_links_fingerprints_by_file_id(initialized_db) -> None:
+async def test_enqueue_bulk_links_fingerprints_by_file_id(_initialized_db) -> None:
     """enqueue_bulk must stamp queued_post_id onto fingerprints whose file_id
     matches an inserted post; mismatched / missing file_ids stay None."""
     user_id = 8002
@@ -86,7 +86,7 @@ async def test_enqueue_bulk_links_fingerprints_by_file_id(initialized_db) -> Non
 
 
 @pytest.mark.asyncio
-async def test_enqueue_bulk_skips_fingerprints_when_none(initialized_db) -> None:
+async def test_enqueue_bulk_skips_fingerprints_when_none(_initialized_db) -> None:
     """When fingerprints is None or channel_db_id is None we must still insert
     posts but not touch the fingerprints table."""
     user_id = 8003
@@ -106,7 +106,7 @@ async def test_enqueue_bulk_skips_fingerprints_when_none(initialized_db) -> None
 
 
 @pytest.mark.asyncio
-async def test_pin_and_unpin_roundtrip(initialized_db) -> None:
+async def test_pin_and_unpin_roundtrip(_initialized_db) -> None:
     user_id = 8004
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-8004")
     _, ids = await db.add_queued_posts_bulk(sid, [{"media_type": "photo", "file_id": "k"}])
@@ -120,7 +120,7 @@ async def test_pin_and_unpin_roundtrip(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bulk_set_scheduled_for_applies_to_all_ids(initialized_db) -> None:
+async def test_bulk_set_scheduled_for_applies_to_all_ids(_initialized_db) -> None:
     user_id = 8005
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-8005")
     _, ids = await db.add_queued_posts_bulk(
@@ -142,7 +142,7 @@ async def test_bulk_set_scheduled_for_applies_to_all_ids(initialized_db) -> None
 
 
 @pytest.mark.asyncio
-async def test_complete_send_applies_all_writes(initialized_db) -> None:
+async def test_complete_send_applies_all_writes(_initialized_db) -> None:
     user_id = 9001
     ch_id, sid = await _seed_user_channel_schedule(user_id, tg_id="-9001")
     _, post_ids = await db.add_queued_posts_bulk(
@@ -197,7 +197,7 @@ async def test_complete_send_applies_all_writes(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_complete_send_rolls_back_on_inner_failure(initialized_db, monkeypatch) -> None:
+async def test_complete_send_rolls_back_on_inner_failure(_initialized_db, monkeypatch) -> None:
     """If any in-tx step raises, all preceding writes in the orchestrator
     must be rolled back. We force the last step
     (update_schedule_next_planned_run) to raise and assert that earlier steps
@@ -222,7 +222,7 @@ async def test_complete_send_rolls_back_on_inner_failure(initialized_db, monkeyp
     )
     stats_before = await _today_stats()
 
-    async def _boom(*args, **kwargs):
+    async def _boom(*_args, **_kwargs):
         raise RuntimeError("simulated crash")
 
     monkeypatch.setattr(db, "_update_schedule_next_planned_run_in_tx", _boom)
@@ -252,7 +252,7 @@ async def test_complete_send_rolls_back_on_inner_failure(initialized_db, monkeyp
 
 @pytest.mark.asyncio
 async def test_complete_retry_increments_failures_and_updates_post(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     user_id = 9003
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-9003")
@@ -279,7 +279,7 @@ async def test_complete_retry_increments_failures_and_updates_post(
 
 
 @pytest.mark.asyncio
-async def test_complete_failure_pause_pauses_schedule(initialized_db) -> None:
+async def test_complete_failure_pause_pauses_schedule(_initialized_db) -> None:
     user_id = 9004
     _, sid = await _seed_user_channel_schedule(user_id, tg_id="-9004")
     stats_before = await _today_stats()
@@ -298,7 +298,7 @@ async def test_complete_failure_pause_pauses_schedule(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_removes_post_and_unposted_fingerprints(initialized_db) -> None:
+async def test_cancel_removes_post_and_unposted_fingerprints(_initialized_db) -> None:
     user_id = 9005
     ch_id, sid = await _seed_user_channel_schedule(user_id, tg_id="-9005")
     _, post_ids = await db.add_queued_posts_bulk(
@@ -339,7 +339,9 @@ async def test_cancel_removes_post_and_unposted_fingerprints(initialized_db) -> 
 
 
 @pytest.mark.asyncio
-async def test_cancel_rolls_back_fingerprint_delete_on_failure(initialized_db, monkeypatch) -> None:
+async def test_cancel_rolls_back_fingerprint_delete_on_failure(
+    _initialized_db, monkeypatch
+) -> None:
     """If the queued-post delete step raises, the fingerprint deletion executed
     earlier in the same transaction must be rolled back."""
     user_id = 9006
@@ -361,7 +363,7 @@ async def test_cancel_rolls_back_fingerprint_delete_on_failure(initialized_db, m
         ],
     )
 
-    async def _boom(*args, **kwargs):
+    async def _boom(*_args, **_kwargs):
         raise RuntimeError("simulated crash")
 
     monkeypatch.setattr(db, "_delete_queued_post_in_tx", _boom)

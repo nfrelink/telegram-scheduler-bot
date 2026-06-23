@@ -14,10 +14,7 @@ SQLITE_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 def to_sqlite_timestamp(dt: datetime) -> str:
     """Convert datetime to a UTC timestamp string suitable for SQLite comparisons."""
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=UTC)
-    else:
-        dt = dt.astimezone(UTC)
+    dt = dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
     # SQLite CURRENT_TIMESTAMP has second precision and no timezone suffix.
     dt = dt.replace(microsecond=0, tzinfo=None)

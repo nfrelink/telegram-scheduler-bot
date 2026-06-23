@@ -169,9 +169,11 @@ async def test_atomic_write_preserves_old_file_on_failure(
     # Note: with `on_flush=False` (PTB default), `update_user_data` itself
     # calls `_dump_singlefile`, so the patch has to wrap the write call,
     # not a separate `flush()`.
-    with patch("persistence.os.fsync", side_effect=RuntimeError("boom")):
-        with pytest.raises(RuntimeError, match="boom"):
-            await writer.update_user_data(user_id=1, data={"second": True})
+    with (
+        patch("persistence.os.fsync", side_effect=RuntimeError("boom")),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        await writer.update_user_data(user_id=1, data={"second": True})
 
     assert pickle_path.read_bytes() == good_bytes, (
         "previous pickle contents must survive a failed write"
@@ -298,7 +300,7 @@ def test_create_application_starts_when_pickle_is_corrupt(
     monkeypatch.setenv("BOT_PERSISTENCE_PATH", str(bad_file))
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:test_token_for_create_application")
 
-    from bot import create_application
+    from bot import create_application  # noqa: PLC0415 — import after env monkeypatch
 
     application = create_application()
 

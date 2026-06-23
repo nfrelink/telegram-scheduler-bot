@@ -33,7 +33,7 @@ async def _make_schedule(user_id: int, *, suffix: str = "") -> tuple[dict, dict,
 
 
 @pytest.mark.asyncio
-async def test_get_user_timezone_returns_none_when_not_set(initialized_db) -> None:
+async def test_get_user_timezone_returns_none_when_not_set(_initialized_db) -> None:
     user_id = 8001
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -42,7 +42,7 @@ async def test_get_user_timezone_returns_none_when_not_set(initialized_db) -> No
 
 
 @pytest.mark.asyncio
-async def test_set_and_get_user_timezone_roundtrip(initialized_db) -> None:
+async def test_set_and_get_user_timezone_roundtrip(_initialized_db) -> None:
     user_id = 8002
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -56,7 +56,7 @@ async def test_set_and_get_user_timezone_roundtrip(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_set_user_timezone_none_clears_value(initialized_db) -> None:
+async def test_set_user_timezone_none_clears_value(_initialized_db) -> None:
     user_id = 8003
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -74,7 +74,7 @@ async def test_set_user_timezone_none_clears_value(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_user_channels_returns_all_channels_for_user(initialized_db) -> None:
+async def test_get_user_channels_returns_all_channels_for_user(_initialized_db) -> None:
     user_id = 8004
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -94,7 +94,7 @@ async def test_get_user_channels_returns_all_channels_for_user(initialized_db) -
 
 
 @pytest.mark.asyncio
-async def test_get_user_channels_only_returns_own_channels(initialized_db) -> None:
+async def test_get_user_channels_only_returns_own_channels(_initialized_db) -> None:
     await db.upsert_user(user_id=8005, username="u", first_name="f", last_name="l", is_admin=False)
     await db.upsert_user(user_id=8006, username="u", first_name="f", last_name="l", is_admin=False)
     await db.create_channel(
@@ -115,7 +115,7 @@ async def test_get_user_channels_only_returns_own_channels(initialized_db) -> No
 
 
 @pytest.mark.asyncio
-async def test_get_channel_by_id_returns_correct_data(initialized_db) -> None:
+async def test_get_channel_by_id_returns_correct_data(_initialized_db) -> None:
     user_id = 8007
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -130,7 +130,7 @@ async def test_get_channel_by_id_returns_correct_data(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_channel_by_id_returns_none_for_missing_id(initialized_db) -> None:
+async def test_get_channel_by_id_returns_none_for_missing_id(_initialized_db) -> None:
     assert await db.get_channel_by_id(99999999) is None
 
 
@@ -140,16 +140,16 @@ async def test_get_channel_by_id_returns_none_for_missing_id(initialized_db) -> 
 
 
 @pytest.mark.asyncio
-async def test_get_queue_count_starts_at_zero(initialized_db) -> None:
+async def test_get_queue_count_starts_at_zero(_initialized_db) -> None:
     user_id = 8008
-    ch, schedule, _ = await _make_schedule(user_id)
+    _ch, schedule, _ = await _make_schedule(user_id)
     assert await db.get_queue_count(int(schedule["id"])) == 0
 
 
 @pytest.mark.asyncio
-async def test_get_queue_count_reflects_bulk_insert(initialized_db) -> None:
+async def test_get_queue_count_reflects_bulk_insert(_initialized_db) -> None:
     user_id = 8009
-    ch, schedule, _ = await _make_schedule(user_id)
+    _ch, schedule, _ = await _make_schedule(user_id)
     schedule_id = int(schedule["id"])
 
     await db.add_queued_posts_bulk(
@@ -164,7 +164,7 @@ async def test_get_queue_count_reflects_bulk_insert(initialized_db) -> None:
 
 @pytest.mark.asyncio
 async def test_get_channel_queue_count_aggregates_across_schedules(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     user_id = 8010
     await db.upsert_user(
@@ -208,9 +208,9 @@ async def test_get_channel_queue_count_aggregates_across_schedules(
 
 
 @pytest.mark.asyncio
-async def test_get_queued_post_with_owner_returns_correct_owner(initialized_db) -> None:
+async def test_get_queued_post_with_owner_returns_correct_owner(_initialized_db) -> None:
     user_id = 8011
-    ch, schedule, _ = await _make_schedule(user_id)
+    _ch, schedule, _ = await _make_schedule(user_id)
     await db.add_queued_posts_bulk(int(schedule["id"]), [{"media_type": "photo", "file_id": "z"}])
 
     posts = await db.get_queued_posts(int(schedule["id"]), limit=1)
@@ -223,7 +223,7 @@ async def test_get_queued_post_with_owner_returns_correct_owner(initialized_db) 
 
 @pytest.mark.asyncio
 async def test_get_queued_post_with_owner_returns_none_for_missing_id(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     assert await db.get_queued_post_with_owner(99999999) is None
 
@@ -234,7 +234,7 @@ async def test_get_queued_post_with_owner_returns_none_for_missing_id(
 
 
 @pytest.mark.asyncio
-async def test_get_schedule_with_channel_returns_joined_data(initialized_db) -> None:
+async def test_get_schedule_with_channel_returns_joined_data(_initialized_db) -> None:
     user_id = 8012
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -260,7 +260,7 @@ async def test_get_schedule_with_channel_returns_joined_data(initialized_db) -> 
 
 @pytest.mark.asyncio
 async def test_get_schedule_with_channel_returns_none_for_missing_id(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     assert await db.get_schedule_with_channel(99999999) is None
 
@@ -271,9 +271,9 @@ async def test_get_schedule_with_channel_returns_none_for_missing_id(
 
 
 @pytest.mark.asyncio
-async def test_delete_schedule_removes_it_from_db(initialized_db) -> None:
+async def test_delete_schedule_removes_it_from_db(_initialized_db) -> None:
     user_id = 8013
-    ch, schedule, _ = await _make_schedule(user_id)
+    _ch, schedule, _ = await _make_schedule(user_id)
     schedule_id = int(schedule["id"])
 
     assert await db.get_schedule(schedule_id) is not None
@@ -282,9 +282,9 @@ async def test_delete_schedule_removes_it_from_db(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_schedule_is_idempotent(initialized_db) -> None:
+async def test_delete_schedule_is_idempotent(_initialized_db) -> None:
     user_id = 8014
-    ch, schedule, _ = await _make_schedule(user_id)
+    _ch, schedule, _ = await _make_schedule(user_id)
     schedule_id = int(schedule["id"])
 
     await db.delete_schedule(schedule_id, user_id=user_id)

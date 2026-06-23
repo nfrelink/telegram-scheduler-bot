@@ -34,6 +34,7 @@ from typing import Any
 
 from telegram._bot import Bot
 from telegram.ext import BasePersistence, PersistenceInput, PicklePersistence
+from telegram.ext._picklepersistence import _BotPickler
 from telegram.ext._utils.types import CDCData, ConversationDict, ConversationKey
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,7 @@ class _ValidatingUnpickler(pickle.Unpickler):
     only asking "does this file parse end-to-end" — so the sentinel is fine.
     """
 
-    def persistent_load(self, pid: object) -> object:
+    def persistent_load(self, _pid: object) -> object:
         return None
 
 
@@ -76,12 +77,11 @@ def _is_pickle_loadable(path: Path) -> bool:
         with path.open("rb") as f:
             _ValidatingUnpickler(f).load()
     except (pickle.UnpicklingError, EOFError, AttributeError, ImportError) as e:
-        logger.error(
-            "Conversation persistence file is unreadable (%s: %s); "
+        logger.exception(
+            "Conversation persistence file is unreadable (%s); "
             "starting with a no-op persistence instead. The bad file is at "
             "%s and can be deleted manually to clear the warning on next start.",
             type(e).__name__,
-            e,
             path,
             extra={
                 "event": "persistence_corrupt",
@@ -141,15 +141,13 @@ class _AtomicPicklePersistence(PicklePersistence):
         # Including the pid in the suffix makes concurrent writes from
         # different processes (e.g. pytest workers, accidental double-start)
         # collide on rename rather than on the temp file itself.
-        from telegram.ext._picklepersistence import _BotPickler
-
         tmp_path = self.filepath.with_suffix(self.filepath.suffix + f".{os.getpid()}.tmp")
         try:
             with tmp_path.open("wb") as file:
                 _BotPickler(self.bot, file, protocol=pickle.HIGHEST_PROTOCOL).dump(data)
                 file.flush()
                 os.fsync(file.fileno())
-            os.replace(tmp_path, self.filepath)
+            tmp_path.replace(self.filepath)
         except BaseException:
             # If anything goes wrong before the rename, the temp file is
             # garbage; remove it so it can't accumulate or be mistaken for
@@ -219,42 +217,42 @@ class _NoopPersistence(BasePersistence):
     async def get_callback_data(self) -> CDCData | None:
         return None
 
-    async def get_conversations(self, name: str) -> ConversationDict:
+    async def get_conversations(self, _name: str) -> ConversationDict:
         return {}
 
     async def update_conversation(
         self,
-        name: str,
-        key: ConversationKey,
-        new_state: object | None,
+        _name: str,
+        _key: ConversationKey,
+        _new_state: object | None,
     ) -> None:
         return None
 
-    async def update_user_data(self, user_id: int, data: Any) -> None:
+    async def update_user_data(self, _user_id: int, _data: Any) -> None:
         return None
 
-    async def update_chat_data(self, chat_id: int, data: Any) -> None:
+    async def update_chat_data(self, _chat_id: int, _data: Any) -> None:
         return None
 
-    async def update_bot_data(self, data: Any) -> None:
+    async def update_bot_data(self, _data: Any) -> None:
         return None
 
-    async def update_callback_data(self, data: CDCData) -> None:
+    async def update_callback_data(self, _data: CDCData) -> None:
         return None
 
-    async def drop_chat_data(self, chat_id: int) -> None:
+    async def drop_chat_data(self, _chat_id: int) -> None:
         return None
 
-    async def drop_user_data(self, user_id: int) -> None:
+    async def drop_user_data(self, _user_id: int) -> None:
         return None
 
-    async def refresh_user_data(self, user_id: int, user_data: Any) -> None:
+    async def refresh_user_data(self, _user_id: int, _user_data: Any) -> None:
         return None
 
-    async def refresh_chat_data(self, chat_id: int, chat_data: Any) -> None:
+    async def refresh_chat_data(self, _chat_id: int, _chat_data: Any) -> None:
         return None
 
-    async def refresh_bot_data(self, bot_data: Any) -> None:
+    async def refresh_bot_data(self, _bot_data: Any) -> None:
         return None
 
     async def flush(self) -> None:

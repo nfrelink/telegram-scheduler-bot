@@ -13,7 +13,7 @@ from telegram.ext import (
 )
 
 from database import queries as db
-from handlers.common import ensure_user_record
+from handlers.common import ensure_user_record, safe_edit_message_text
 from services import dedup
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ async def duplicates_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return VIEWING
 
 
-async def duplicates_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def duplicates_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle toggle button presses."""
     query = update.callback_query
     if query is None or update.effective_user is None:
@@ -59,19 +59,13 @@ async def duplicates_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_ctx = await db.get_user_context(user_id)
     channel_db_id = user_ctx.get("selected_channel_id")
     if channel_db_id is None:
-        try:
-            await query.edit_message_text("No channel selected.")
-        except Exception:
-            pass
+        await safe_edit_message_text(query, "No channel selected.")
         return ConversationHandler.END
 
     channel_db_id = int(channel_db_id)
     channel = await db.get_channel_by_id(channel_db_id)
     if channel is None:
-        try:
-            await query.edit_message_text("Channel not found.")
-        except Exception:
-            pass
+        await safe_edit_message_text(query, "Channel not found.")
         return ConversationHandler.END
 
     if data == "dupset:toggle_channel":
@@ -81,11 +75,12 @@ async def duplicates_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         current = await dedup.is_user_alerts_enabled(user_id)
         await dedup.set_user_alerts_enabled(user_id, enabled=not current)
     text, keyboard = await _build_status_message(user_id, channel_db_id, channel)
-    try:
-        await query.edit_message_text(text, reply_markup=keyboard)
-    except Exception:
-        pass
+    await safe_edit_message_text(query, text, reply_markup=keyboard)
     return VIEWING
+
+
+async def _duplicates_cancel(_update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    return ConversationHandler.END
 
 
 async def _build_status_message(
@@ -124,7 +119,7 @@ duplicates_conversation_handler = ConversationHandler(
             CallbackQueryHandler(duplicates_callback, pattern=r"^dupset:"),
         ],
     },
-    fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+    fallbacks=[CommandHandler("cancel", _duplicates_cancel)],
     name="duplicates",
     persistent=True,
 )

@@ -44,7 +44,7 @@ async def _make_schedule(user_id: int, channel_suffix: str) -> int:
 
 
 @pytest.mark.asyncio
-async def test_set_and_clear_post_pinned_at(initialized_db) -> None:
+async def test_set_and_clear_post_pinned_at(_initialized_db) -> None:
     user_id = 7001
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -72,7 +72,7 @@ async def test_set_and_clear_post_pinned_at(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_earliest_pinned_at_returns_none_when_no_pins(initialized_db) -> None:
+async def test_get_earliest_pinned_at_returns_none_when_no_pins(_initialized_db) -> None:
     user_id = 7002
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -85,7 +85,7 @@ async def test_get_earliest_pinned_at_returns_none_when_no_pins(initialized_db) 
 
 
 @pytest.mark.asyncio
-async def test_get_earliest_pinned_at_returns_min_value(initialized_db) -> None:
+async def test_get_earliest_pinned_at_returns_min_value(_initialized_db) -> None:
     user_id = 7003
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -120,7 +120,7 @@ async def test_get_earliest_pinned_at_returns_min_value(initialized_db) -> None:
 
 @pytest.mark.asyncio
 async def test_get_next_queued_post_returns_due_pinned_before_fifo(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     """A pinned post whose pinned_at <= now is returned ahead of FIFO posts."""
     user_id = 7004
@@ -151,7 +151,7 @@ async def test_get_next_queued_post_returns_due_pinned_before_fifo(
 
 @pytest.mark.asyncio
 async def test_get_next_queued_post_ignores_future_pinned_and_returns_fifo(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     """A pinned post whose pinned_at is in the future is excluded; the FIFO head is returned."""
     user_id = 7005
@@ -181,7 +181,7 @@ async def test_get_next_queued_post_ignores_future_pinned_and_returns_fifo(
 
 @pytest.mark.asyncio
 async def test_get_next_queued_post_earliest_pinned_wins_when_multiple_due(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     """When multiple pinned posts are due, the one with the earliest pinned_at is returned."""
     user_id = 7006
@@ -216,7 +216,7 @@ async def test_get_next_queued_post_earliest_pinned_wins_when_multiple_due(
 
 
 @pytest.mark.asyncio
-async def test_get_queued_posts_unscheduled_excludes_pinned(initialized_db) -> None:
+async def test_get_queued_posts_unscheduled_excludes_pinned(_initialized_db) -> None:
     """Pinned posts must not be returned by get_queued_posts_unscheduled so the
     catch-up scheduler cannot overwrite their pinned_at with a scheduled_for value."""
     user_id = 7007

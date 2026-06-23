@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from telegram import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -26,13 +27,23 @@ from telegram.ext import (
 )
 
 from database import queries as db
-from handlers.common import ensure_user_record
+from handlers.common import ensure_user_record, safe_edit_message_text
 from handlers.selection import selection_segments
 from services import dedup, posting, scheduling
 from utils.image_hash import compute_dhash
 from utils.tg_text import Segment, render, utf16_len
 
 logger = logging.getLogger(__name__)
+
+_CAPTION_PREVIEW_LEN = 80
+_MD_ESCAPABLE_CHARS = set("_*[]()~`>#+-=|{}.!\\")
+_MEDIA_GROUP_ERROR_MSG = (
+    "Something went wrong preparing your media groups. Please start over with /bulk."
+)
+_SINGLE_CAPTION_FORMAT_TIP = (
+    "Tip: for 'single', formatting is preserved. "
+    "You can use [text](url) links and `inline code`.\n\n"
+)
 
 
 (
@@ -247,9 +258,71 @@ def _is_forwarded_message(message: Message) -> bool:
         return True
     if getattr(message, "forward_from", None) is not None:
         return True
-    if getattr(message, "forward_origin", None) is not None:
-        return True
-    return False
+    return getattr(message, "forward_origin", None) is not None
+
+
+@dataclass
+class _MarkdownParseState:
+    out: list[str] = field(default_factory=list)
+    entities: list[dict[str, Any]] = field(default_factory=list)
+    out_utf16: int = 0
+
+    def append_plain(self, text: str) -> None:
+        if not text:
+            return
+        self.out.append(text)
+        self.out_utf16 += utf16_len(text)
+
+
+def _md_try_consume_escape(text: str, index: int, state: _MarkdownParseState) -> int | None:
+    """Consume a backslash-escaped MarkdownV2 character; return new index or None."""
+    if text[index] == "\\" and index + 1 < len(text) and text[index + 1] in _MD_ESCAPABLE_CHARS:
+        state.append_plain(text[index + 1])
+        return index + 2
+    return None
+
+
+def _md_try_consume_inline_code(text: str, index: int, state: _MarkdownParseState) -> int | None:
+    """Consume an inline `code` span; return new index or None."""
+    if text[index] != "`":
+        return None
+    close = text.find("`", index + 1)
+    if close == -1:
+        return None
+    code_text = text[index + 1 : close]
+    start = state.out_utf16
+    state.append_plain(code_text)
+    length = utf16_len(code_text)
+    if length:
+        state.entities.append({"type": "code", "offset": start, "length": length})
+    return close + 1
+
+
+def _md_try_consume_inline_link(text: str, index: int, state: _MarkdownParseState) -> int | None:
+    """Consume an inline [text](url) link; return new index or None."""
+    if text[index] != "[":
+        return None
+    close_bracket = text.find("]", index + 1)
+    if close_bracket == -1 or close_bracket + 1 >= len(text) or text[close_bracket + 1] != "(":
+        return None
+    close_paren = text.find(")", close_bracket + 2)
+    if close_paren == -1:
+        return None
+    link_text = text[index + 1 : close_bracket]
+    url = text[close_bracket + 2 : close_paren]
+    start = state.out_utf16
+    state.append_plain(link_text)
+    length = utf16_len(link_text)
+    if length and url:
+        state.entities.append(
+            {
+                "type": "text_link",
+                "offset": start,
+                "length": length,
+                "url": url,
+            }
+        )
+    return close_paren + 1
 
 
 def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
@@ -261,73 +334,22 @@ def _parse_markdownish(text: str) -> tuple[str, list[dict[str, Any]] | None]:
 
     If nothing is parsed, returns original text and None.
     """
-    out: list[str] = []
-    entities: list[dict[str, Any]] = []
-    i = 0
-    out_utf16 = 0
-    md_escapable = set("_*[]()~`>#+-=|{}.!\\")
-
-    def _append_plain(s: str) -> None:
-        nonlocal out_utf16
-        if not s:
-            return
-        out.append(s)
-        out_utf16 += utf16_len(s)
-
-    while i < len(text):
-        ch = text[i]
-
-        # Treat backslash-escaped MarkdownV2 characters as literals.
-        if ch == "\\" and i + 1 < len(text) and text[i + 1] in md_escapable:
-            _append_plain(text[i + 1])
-            i += 2
+    state = _MarkdownParseState()
+    index = 0
+    while index < len(text):
+        next_index = (
+            _md_try_consume_escape(text, index, state)
+            or _md_try_consume_inline_code(text, index, state)
+            or _md_try_consume_inline_link(text, index, state)
+        )
+        if next_index is not None:
+            index = next_index
             continue
+        state.append_plain(text[index])
+        index += 1
 
-        # Inline code: `...`
-        if ch == "`":
-            j = text.find("`", i + 1)
-            if j != -1:
-                code_text = text[i + 1 : j]
-                start = out_utf16
-                _append_plain(code_text)
-                length = utf16_len(code_text)
-                if length:
-                    entities.append({"type": "code", "offset": start, "length": length})
-                i = j + 1
-                continue
-
-        # Inline link: [text](url)
-        if ch == "[":
-            close_bracket = text.find("]", i + 1)
-            if (
-                close_bracket != -1
-                and close_bracket + 1 < len(text)
-                and text[close_bracket + 1] == "("
-            ):
-                close_paren = text.find(")", close_bracket + 2)
-                if close_paren != -1:
-                    link_text = text[i + 1 : close_bracket]
-                    url = text[close_bracket + 2 : close_paren]
-                    start = out_utf16
-                    _append_plain(link_text)
-                    length = utf16_len(link_text)
-                    if length and url:
-                        entities.append(
-                            {
-                                "type": "text_link",
-                                "offset": start,
-                                "length": length,
-                                "url": url,
-                            }
-                        )
-                    i = close_paren + 1
-                    continue
-
-        _append_plain(ch)
-        i += 1
-
-    out_text = "".join(out)
-    return (out_text, entities or None)
+    out_text = "".join(state.out)
+    return (out_text, state.entities or None)
 
 
 def _get_posts(context: ContextTypes.DEFAULT_TYPE) -> list[dict[str, Any]]:
@@ -531,9 +553,7 @@ def _group_needs_split_prompt(items: list[_CollectedItem], allowlist: set[int]) 
     first = items[0]
     if not first.raw_origin_is_forwarded:
         return False  # locally uploaded — keep as album without prompting
-    if first.raw_origin_chat_id is not None and first.raw_origin_chat_id in allowlist:
-        return False  # allowlisted channel — forward natively without prompting
-    return True  # forwarded from non-allowlisted source (channel or person) — ask
+    return not (first.raw_origin_chat_id is not None and first.raw_origin_chat_id in allowlist)
 
 
 def _origin_link(chat_id: int | None, message_id: int | None) -> str | None:
@@ -562,7 +582,9 @@ def _build_split_prompt(
     """Build the text and inline keyboard for a single split decision."""
     text = f"Album {album_num} of {total_albums} — {count} item(s).\n"
     if first_caption:
-        preview = first_caption[:80] + ("..." if len(first_caption) > 80 else "")
+        preview = first_caption[:_CAPTION_PREVIEW_LEN] + (
+            "..." if len(first_caption) > _CAPTION_PREVIEW_LEN else ""
+        )
         text += f'Caption: "{preview}"\n'
     text += "Keep as one album post, or split into individual posts?"
 
@@ -649,7 +671,7 @@ async def _show_confirmation_message(
         if chat_id:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="Something went wrong preparing your media groups. Please start over with /bulk.",
+                text=_MEDIA_GROUP_ERROR_MSG,
             )
         return ConversationHandler.END
 
@@ -682,6 +704,79 @@ async def _show_confirmation_message(
     return CONFIRMING
 
 
+async def _resolve_bulk_schedule(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> tuple[int, int, bool, str] | None:
+    """Resolve schedule id and channel; reply with error and return None on failure."""
+    if update.message is None or update.effective_user is None:
+        return None
+
+    user_id = update.effective_user.id
+    schedule_id: int | None = None
+    used_selected = False
+
+    if context.args and len(context.args) == 1:
+        try:
+            schedule_id = int(context.args[0])
+        except ValueError:
+            await update.message.reply_text("Invalid schedule id.")
+            return None
+    else:
+        user_ctx = await db.get_user_context(user_id)
+        raw = user_ctx.get("selected_schedule_id")
+        schedule_id = int(raw) if raw is not None else None
+        used_selected = True
+
+    if schedule_id is None:
+        await update.message.reply_text(
+            "Usage: /bulk <schedule_id>\nTip: use /select to pick a default schedule."
+        )
+        return None
+
+    schedule = await db.get_schedule_for_user(user_id, schedule_id)
+    if schedule is None:
+        await update.message.reply_text("Schedule not found or not owned by you.")
+        return None
+
+    return schedule_id, int(schedule["channel_id"]), used_selected, str(schedule.get("name") or "")
+
+
+async def _maybe_offer_resume(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    user_id: int,
+    schedule_id: int,
+    channel_db_id: int,
+) -> int | None:
+    """Prompt to resume a pending staging session; return RESUMING if offered."""
+    pending_session = await db.get_bulk_session(user_id)
+    if not pending_session or int(pending_session["schedule_id"]) != schedule_id:
+        return None
+
+    pending_count = await db.get_staging_count(user_id)
+    if pending_count <= 0:
+        return None
+
+    _state_clear(context)
+    context.user_data["bulk_schedule_id"] = schedule_id
+    context.user_data["bulk_channel_db_id"] = channel_db_id
+    if update.message is not None:
+        await update.message.reply_text(
+            f"You have {pending_count} item(s) from a previous upload.\nResume or start fresh?",
+            reply_markup=InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton("Resume", callback_data="bulk_resume:yes"),
+                        InlineKeyboardButton("Start fresh", callback_data="bulk_resume:no"),
+                    ]
+                ]
+            ),
+        )
+    return RESUMING
+
+
 async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Entry point for /bulk <schedule_id>."""
     await ensure_user_record(update, context)
@@ -693,34 +788,12 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("Please run /bulk in a private chat with the bot.")
         return ConversationHandler.END
 
+    resolved = await _resolve_bulk_schedule(update, context)
+    if resolved is None:
+        return ConversationHandler.END
+
+    schedule_id, channel_db_id, used_selected, schedule_name_from_db = resolved
     user_id = update.effective_user.id
-
-    schedule_id: int | None = None
-    used_selected = False
-    if context.args and len(context.args) == 1:
-        try:
-            schedule_id = int(context.args[0])
-        except ValueError:
-            await update.message.reply_text("Invalid schedule id.")
-            return ConversationHandler.END
-    else:
-        user_ctx = await db.get_user_context(user_id)
-        raw = user_ctx.get("selected_schedule_id")
-        schedule_id = int(raw) if raw is not None else None
-        used_selected = True
-
-    if schedule_id is None:
-        await update.message.reply_text(
-            "Usage: /bulk <schedule_id>\nTip: use /select to pick a default schedule."
-        )
-        return ConversationHandler.END
-
-    schedule = await db.get_schedule_for_user(user_id, schedule_id)
-    if schedule is None:
-        await update.message.reply_text("Schedule not found or not owned by you.")
-        return ConversationHandler.END
-
-    channel_db_id = int(schedule["channel_id"])
 
     if not used_selected:
         await db.set_user_context(
@@ -729,28 +802,16 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             selected_schedule_id=schedule_id,
         )
 
-    # Check for a pending staging session from a previous (interrupted) upload.
-    pending_session = await db.get_bulk_session(user_id)
-    if pending_session and int(pending_session["schedule_id"]) == schedule_id:
-        pending_count = await db.get_staging_count(user_id)
-        if pending_count > 0:
-            _state_clear(context)
-            context.user_data["bulk_schedule_id"] = schedule_id
-            context.user_data["bulk_channel_db_id"] = channel_db_id
-            await update.message.reply_text(
-                f"You have {pending_count} item(s) from a previous upload.\nResume or start fresh?",
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton("Resume", callback_data="bulk_resume:yes"),
-                            InlineKeyboardButton("Start fresh", callback_data="bulk_resume:no"),
-                        ]
-                    ]
-                ),
-            )
-            return RESUMING
+    resume_state = await _maybe_offer_resume(
+        update,
+        context,
+        user_id=user_id,
+        schedule_id=schedule_id,
+        channel_db_id=channel_db_id,
+    )
+    if resume_state is not None:
+        return resume_state
 
-    # No pending session or different schedule — clear any stale staging data.
     await _clear_staging(user_id)
 
     _state_clear(context)
@@ -759,7 +820,7 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     details = await db.get_user_context_details(user_id)
     schedule_name = str(
-        details.get("schedule_name") or schedule.get("name") or f"Schedule {schedule_id}"
+        details.get("schedule_name") or schedule_name_from_db or f"Schedule {schedule_id}"
     )
     segments = [
         Segment(f"Bulk upload started for schedule '{schedule_name}'.\n\n"),
@@ -773,7 +834,7 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             "sent as native Telegram forwards, regardless of caption mode.\n"
         ),
         Segment(
-            "Tip: for 'single', formatting is preserved. You can use [text](url) links and `inline code`.\n\n"
+            _SINGLE_CAPTION_FORMAT_TIP,
         ),
         Segment("Or /cancel to stop."),
     ]
@@ -782,44 +843,40 @@ async def bulk_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return SELECTING_CAPTION_MODE
 
 
-async def bulk_resume_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle the resume/discard decision for a pending staging session."""
-    query = update.callback_query
-    if query is None or update.effective_user is None:
-        return RESUMING
-
-    await query.answer()
-    user_id = update.effective_user.id
-    data = query.data or ""
-
-    if data == "bulk_resume:yes":
-        session = await db.get_bulk_session(user_id)
-        items = await db.get_staging_items(user_id)
-        if not session or not items:
-            try:
-                await query.edit_message_text("Session expired. Starting fresh — run /bulk again.")
-            except Exception:
-                pass
-            await _clear_staging(user_id)
-            _state_clear(context)
-            return ConversationHandler.END
-
+async def _resume_staging_session(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+) -> int:
+    """Load a pending staging session and return the next conversation state."""
+    session = await db.get_bulk_session(user_id)
+    items = await db.get_staging_items(user_id)
+    if not session or not items:
+        await safe_edit_message_text(query, "Session expired. Starting fresh — run /bulk again.")
+        await _clear_staging(user_id)
         _state_clear(context)
-        _load_staging_into_user_data(context, items, session)
-        schedule = await db.get_schedule(int(session["schedule_id"]))
-        if schedule:
-            context.user_data["bulk_channel_db_id"] = int(schedule["channel_id"])
-        posts = _get_posts(context)
-        try:
-            await query.edit_message_text(
-                f"Resumed {len(items)} item(s) ({len(posts)} post(s)).\n"
-                "Send more media, or /done to finish."
-            )
-        except Exception:
-            pass
-        return COLLECTING_MEDIA
+        return ConversationHandler.END
 
-    # "Start fresh"
+    _state_clear(context)
+    _load_staging_into_user_data(context, items, session)
+    schedule = await db.get_schedule(int(session["schedule_id"]))
+    if schedule:
+        context.user_data["bulk_channel_db_id"] = int(schedule["channel_id"])
+    posts = _get_posts(context)
+    await safe_edit_message_text(
+        query,
+        f"Resumed {len(items)} item(s) ({len(posts)} post(s)).\n"
+        "Send more media, or /done to finish.",
+    )
+    return COLLECTING_MEDIA
+
+
+async def _start_fresh_after_discard(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    user_id: int,
+) -> int:
+    """Clear staging and restart caption-mode selection."""
     await _clear_staging(user_id)
     schedule_id = context.user_data.get("bulk_schedule_id")
     _state_clear(context)
@@ -836,11 +893,24 @@ async def bulk_resume_decision(update: Update, context: ContextTypes.DEFAULT_TYP
         Segment("Or /cancel to stop."),
     ]
     text, entities = render(segments)
-    try:
-        await query.edit_message_text(text, entities=entities)
-    except Exception:
-        pass
+    await safe_edit_message_text(query, text, entities=entities)
     return SELECTING_CAPTION_MODE
+
+
+async def bulk_resume_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle the resume/discard decision for a pending staging session."""
+    query = update.callback_query
+    if query is None or update.effective_user is None:
+        return RESUMING
+
+    await query.answer()
+    user_id = update.effective_user.id
+    data = query.data or ""
+
+    if data == "bulk_resume:yes":
+        return await _resume_staging_session(query, context, user_id)
+
+    return await _start_fresh_after_discard(query, context, user_id)
 
 
 async def bulk_set_caption_mode(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -976,7 +1046,7 @@ async def _check_and_warn_duplicate(
             )
             _record_fp(None)
         except Exception:
-            logger.warning("dHash computation failed for file_id=%s", item.file_id, exc_info=True)
+            logger.exception("dHash computation failed for file_id=%s", item.file_id)
     else:
         _record_fp(None)
 
@@ -1007,6 +1077,66 @@ async def _check_and_warn_duplicate(
         )
 
 
+def _parse_dup_seq(data: str) -> int | None:
+    try:
+        return int(data.split(":")[2])
+    except IndexError, ValueError:
+        return None
+
+
+async def _remove_dup_from_upload(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    file_id: str,
+    user_id: int,
+) -> int:
+    """Remove a duplicate file from in-memory state and staging; return remaining post count."""
+    posts = _get_posts(context)
+    context.user_data["bulk_posts"] = [p for p in posts if p.get("file_id") != file_id]
+
+    groups = _get_media_groups(context)
+    for gid, items in list(groups.items()):
+        groups[gid] = [i for i in items if i.file_id != file_id]
+        if not groups[gid]:
+            del groups[gid]
+            _get_media_group_indexes(context).pop(gid, None)
+
+    fp_data = _get_fingerprint_data(context)
+    context.user_data["bulk_fingerprint_data"] = [
+        fp for fp in fp_data if fp.get("file_id") != file_id
+    ]
+
+    if user_id:
+        await db.remove_staging_items_by_file_id(user_id, file_id)
+
+    return len(_get_posts(context))
+
+
+async def _handle_dup_keep(query: CallbackQuery) -> None:
+    await safe_edit_message_text(query, "Kept.")
+
+
+async def _handle_dup_remove(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    update: Update,
+    data: str,
+) -> None:
+    seq = _parse_dup_seq(data)
+    if seq is None:
+        return
+
+    dup_map: dict[int, str] = context.user_data.get("bulk_dup_map", {})
+    file_id = dup_map.pop(seq, None)
+    if file_id is None:
+        await safe_edit_message_text(query, "Already handled.")
+        return
+
+    user_id = update.effective_user.id if update.effective_user else 0
+    remaining = await _remove_dup_from_upload(context, file_id=file_id, user_id=user_id)
+    await safe_edit_message_text(query, f"Removed from upload. ({remaining} post(s) remaining)")
+
+
 async def bulk_duplicate_decision(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle remove/keep decisions for duplicate warnings."""
     query = update.callback_query
@@ -1017,56 +1147,11 @@ async def bulk_duplicate_decision(update: Update, context: ContextTypes.DEFAULT_
     data = query.data or ""
 
     if data.startswith("dup:keep:"):
-        try:
-            await query.edit_message_text("Kept.")
-        except Exception:
-            pass
+        await _handle_dup_keep(query)
         return
 
     if data.startswith("dup:rm:"):
-        try:
-            seq = int(data.split(":")[2])
-        except IndexError, ValueError:
-            return
-
-        dup_map: dict[int, str] = context.user_data.get("bulk_dup_map", {})
-        file_id = dup_map.pop(seq, None)
-        if file_id is None:
-            try:
-                await query.edit_message_text("Already handled.")
-            except Exception:
-                pass
-            return
-
-        user_id = update.effective_user.id if update.effective_user else 0
-
-        # Remove from in-memory posts
-        posts = _get_posts(context)
-        context.user_data["bulk_posts"] = [p for p in posts if p.get("file_id") != file_id]
-
-        # Remove from media groups
-        groups = _get_media_groups(context)
-        for gid, items in list(groups.items()):
-            groups[gid] = [i for i in items if i.file_id != file_id]
-            if not groups[gid]:
-                del groups[gid]
-                _get_media_group_indexes(context).pop(gid, None)
-
-        # Remove from fingerprint tracking
-        fp_data = _get_fingerprint_data(context)
-        context.user_data["bulk_fingerprint_data"] = [
-            fp for fp in fp_data if fp.get("file_id") != file_id
-        ]
-
-        # Remove from staging
-        if user_id:
-            await db.remove_staging_items_by_file_id(user_id, file_id)
-
-        remaining = len(_get_posts(context))
-        try:
-            await query.edit_message_text(f"Removed from upload. ({remaining} post(s) remaining)")
-        except Exception:
-            pass
+        await _handle_dup_remove(query, context, update, data)
 
 
 async def bulk_collect_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1421,10 +1506,7 @@ async def bulk_split_decision(update: Update, context: ContextTypes.DEFAULT_TYPE
                 first_caption=next_item.get("first_caption"),
                 origin_link=next_item.get("origin_link"),
             )
-            try:
-                await query.edit_message_text(text, reply_markup=keyboard)
-            except Exception:
-                pass
+            await safe_edit_message_text(query, text, reply_markup=keyboard)
             return DECIDING_SPLITS
 
     # All decisions recorded — apply and show confirmation.

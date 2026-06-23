@@ -53,8 +53,10 @@ CREATE TABLE IF NOT EXISTS schedules (
     state TEXT DEFAULT 'active',  -- 'active', 'paused', 'empty_paused'
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    last_run_at TIMESTAMP,  -- Historical fire timestamp; not read by the scheduler in v2 (kept for audit/migration).
-    next_planned_run_at TIMESTAMP,  -- Single source of truth for when this schedule should next fire (UTC). NULL when paused/empty_paused.
+    last_run_at TIMESTAMP,  -- Historical fire timestamp; not read by the scheduler in v2
+    -- (kept for audit/migration).
+    next_planned_run_at TIMESTAMP,  -- Single source of truth for when this schedule should
+    -- next fire (UTC). NULL when paused/empty_paused.
     FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
 );
 
@@ -77,7 +79,8 @@ CREATE TABLE IF NOT EXISTS queued_posts (
     caption_entities TEXT,  -- JSON list of Telegram MessageEntity dicts
     forward_from_chat_id INTEGER,  -- Where to forward FROM (usually the user's chat with the bot)
     forward_from_message_id INTEGER,  -- Message id in forward_from_chat_id
-    forward_origin_chat_id INTEGER,  -- Original source chat id (e.g., the channel that was forwarded from)
+    forward_origin_chat_id INTEGER,  -- Original source chat id
+    -- (e.g., the channel that was forwarded from)
     forward_origin_message_id INTEGER,  -- Original source message id (e.g., channel post id)
     media_group_data TEXT,  -- JSON array for media groups
     position INTEGER NOT NULL,  -- Queue position (FIFO)
@@ -89,7 +92,8 @@ CREATE TABLE IF NOT EXISTS queued_posts (
 
 CREATE INDEX IF NOT EXISTS idx_queued_posts_schedule_id ON queued_posts(schedule_id);
 CREATE INDEX IF NOT EXISTS idx_queued_posts_position ON queued_posts(schedule_id, position);
-CREATE INDEX IF NOT EXISTS idx_queued_posts_scheduled_for ON queued_posts(scheduled_for) WHERE scheduled_for IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_queued_posts_scheduled_for
+    ON queued_posts(scheduled_for) WHERE scheduled_for IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_queued_posts_retry ON queued_posts(retry_count);
 
 CREATE TABLE IF NOT EXISTS verification_codes (
@@ -104,7 +108,8 @@ CREATE TABLE IF NOT EXISTS verification_codes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_verification_codes_code ON verification_codes(code);
-CREATE INDEX IF NOT EXISTS idx_verification_codes_user_channel ON verification_codes(user_id, channel_id);
+CREATE INDEX IF NOT EXISTS idx_verification_codes_user_channel
+    ON verification_codes(user_id, channel_id);
 CREATE INDEX IF NOT EXISTS idx_verification_codes_expires ON verification_codes(expires_at);
 
 -- Per-user selection context (small; one row per user)
@@ -130,7 +135,8 @@ CREATE TABLE IF NOT EXISTS forward_origin_allowlist (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_forward_origin_allowlist_user_id ON forward_origin_allowlist(user_id);
+CREATE INDEX IF NOT EXISTS idx_forward_origin_allowlist_user_id
+    ON forward_origin_allowlist(user_id);
 
 -- Bulk upload staging: persists collected items so they survive bot restarts.
 -- Each row is a single media item; media groups share the same media_group_id.
@@ -183,7 +189,8 @@ CREATE TABLE IF NOT EXISTS media_fingerprints (
 );
 
 CREATE INDEX IF NOT EXISTS idx_media_fingerprints_channel ON media_fingerprints(channel_id);
-CREATE INDEX IF NOT EXISTS idx_media_fingerprints_file_unique ON media_fingerprints(channel_id, file_unique_id);
+CREATE INDEX IF NOT EXISTS idx_media_fingerprints_file_unique
+    ON media_fingerprints(channel_id, file_unique_id);
 
 -- Aggregated daily delivery stats (small table; one row per day)
 CREATE TABLE IF NOT EXISTS delivery_stats_daily (

@@ -66,8 +66,7 @@ _TOKEN_RE = re.compile(r"\d{6,}:[A-Za-z0-9_-]{20,}")
 
 def _redact(text: str) -> str:
     text = _BOT_PREFIX_TOKEN_RE.sub("bot<redacted>", text)
-    text = _TOKEN_RE.sub("<redacted>", text)
-    return text
+    return _TOKEN_RE.sub("<redacted>", text)
 
 
 def _json_safe(value: Any) -> Any:

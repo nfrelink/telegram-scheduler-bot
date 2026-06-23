@@ -7,7 +7,6 @@ This is a smoke test you can run locally or inside Docker.
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
@@ -18,10 +17,13 @@ def _add_src_to_path() -> None:
     sys.path.insert(0, str(src))
 
 
-async def _verify() -> None:
-    from database import init_database
-    from database.connection import get_database_path, get_db
+_add_src_to_path()
 
+from database import init_database  # noqa: E402
+from database.connection import get_database_path, get_db  # noqa: E402
+
+
+async def _verify() -> None:
     await init_database()
 
     expected_tables = {
@@ -45,14 +47,10 @@ async def _verify() -> None:
     if missing:
         raise RuntimeError(f"Missing expected tables: {sorted(missing)}")
 
-    db_path = get_database_path()
-    print("OK: database initialized and tables verified.")
-    print(f"DATABASE_PATH={os.getenv('DATABASE_PATH', 'data/scheduler.db')}")
-    print(f"Resolved DB path: {db_path}")
+    get_database_path()
 
 
 def main() -> None:
-    _add_src_to_path()
     asyncio.run(_verify())
 
 

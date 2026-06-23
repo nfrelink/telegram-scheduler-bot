@@ -285,7 +285,10 @@ async def create_channel(
         )
         row = await cursor.fetchone()
         channel = _row_to_dict(row)
-        assert channel is not None
+        if channel is None:
+            raise ValueError(
+                f"create_channel: INSERT RETURNING produced no row for user_id={user_id}"
+            )
         return channel
 
 
@@ -365,7 +368,10 @@ async def create_schedule(
         )
         row = await cursor.fetchone()
         schedule = _row_to_dict(row)
-        assert schedule is not None
+        if schedule is None:
+            raise ValueError(
+                f"create_schedule: INSERT RETURNING produced no row for channel_id={channel_db_id}"
+            )
         schedule["pattern"] = json.loads(schedule["pattern"])
         return schedule
 
@@ -561,7 +567,11 @@ async def _update_schedule_last_run_in_tx(db, schedule_id: int) -> None:  # type
     out-of-tx caller currently needs one.
     """
     await db.execute(
-        "UPDATE schedules SET last_run_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        """
+        UPDATE schedules
+        SET last_run_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
         (schedule_id,),
     )
 
@@ -594,7 +604,12 @@ async def delete_schedule(schedule_id: int, *, user_id: int) -> None:
     """Delete schedule (cascades to queued_posts)."""
     async with transaction() as db:
         await db.execute(
-            "DELETE FROM schedules WHERE id = ? AND channel_id IN (SELECT id FROM channels WHERE user_id = ?)",
+            """
+            DELETE FROM schedules
+            WHERE id = ? AND channel_id IN (
+                SELECT id FROM channels WHERE user_id = ?
+            )
+            """,
             (schedule_id, user_id),
         )
 
@@ -619,7 +634,8 @@ async def add_queued_posts_bulk(
             - forward_from_chat_id (optional): Telegram chat id to forward FROM
             - forward_from_message_id (optional): Telegram message id in forward_from_chat_id
             - forward_origin_chat_id (optional): Original source chat id (e.g., channel id)
-            - forward_origin_message_id (optional): Original source message id (e.g., channel post id)
+            - forward_origin_message_id (optional): Original source message id
+              (e.g., channel post id)
             - media_group_data (optional)
 
     Returns:
@@ -631,7 +647,8 @@ async def add_queued_posts_bulk(
     for post in posts:
         if post.get("media_type") == "media_group" and not post.get("media_group_data"):
             raise ValueError(
-                f"Cannot queue media_group post without media_group_data (schedule_id={schedule_id})"
+                "Cannot queue media_group post without media_group_data "
+                f"(schedule_id={schedule_id})"
             )
 
     async with transaction() as db:

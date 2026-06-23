@@ -23,6 +23,9 @@ WEEKDAY_NAME_TO_INT: dict[str, int] = {
     "sunday": 6,
 }
 
+MAX_HOUR = 23
+MAX_MINUTE = 59
+
 
 def _get_timezone(tz_name: str | None) -> tzinfo:
     """Resolve a stored timezone name to a tzinfo, with UTC fallback.
@@ -44,14 +47,14 @@ def _get_timezone(tz_name: str | None) -> tzinfo:
     try:
         return ZoneInfo(tz_name)
     except ZoneInfoNotFoundError:
-        logger.error(
+        logger.exception(
             "Timezone %r not found (missing tzdata or write-time "
             "validation bypassed); falling back to UTC",
             tz_name,
         )
         return UTC
     except Exception:
-        logger.error(
+        logger.exception(
             "Unknown timezone %r (write-time validation bypassed); falling back to UTC",
             tz_name,
         )
@@ -73,9 +76,43 @@ def parse_time_string(value: str) -> tuple[int, int] | None:
     except Exception:
         return None
 
-    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+    if not (0 <= hour <= MAX_HOUR and 0 <= minute <= MAX_MINUTE):
         return None
     return hour, minute
+
+
+def _validate_interval_pattern(pattern: dict) -> tuple[bool, str]:
+    hours = int(pattern.get("hours", 0) or 0)
+    minutes = int(pattern.get("minutes", 0) or 0)
+    if hours <= 0 and minutes <= 0:
+        return (
+            False,
+            "Interval schedule must include hours and/or minutes greater than 0.",
+        )
+    return True, "OK"
+
+
+def _validate_daily_pattern(pattern: dict) -> tuple[bool, str]:
+    times = pattern.get("times", [])
+    if not isinstance(times, list) or not times:
+        return False, "Daily schedule must include a non-empty list of times."
+    if not all(isinstance(t, str) and parse_time_string(t) for t in times):
+        return False, "Daily times must be in HH:MM format."
+    return True, "OK"
+
+
+def _validate_weekly_pattern(pattern: dict) -> tuple[bool, str]:
+    days = pattern.get("days", [])
+    times = pattern.get("times", [])
+    if not isinstance(days, list) or not days:
+        return False, "Weekly schedule must include a non-empty list of days."
+    if not isinstance(times, list) or not times:
+        return False, "Weekly schedule must include a non-empty list of times."
+    if not all(isinstance(d, str) and d.lower() in WEEKDAY_NAME_TO_INT for d in days):
+        return False, "Weekly days must be weekday names (e.g., monday, tuesday)."
+    if not all(isinstance(t, str) and parse_time_string(t) for t in times):
+        return False, "Weekly times must be in HH:MM format."
+    return True, "OK"
 
 
 def validate_schedule_pattern(pattern: dict) -> tuple[bool, str]:
@@ -83,35 +120,11 @@ def validate_schedule_pattern(pattern: dict) -> tuple[bool, str]:
     schedule_type = pattern.get("type")
 
     if schedule_type == "interval":
-        hours = int(pattern.get("hours", 0) or 0)
-        minutes = int(pattern.get("minutes", 0) or 0)
-        if hours <= 0 and minutes <= 0:
-            return (
-                False,
-                "Interval schedule must include hours and/or minutes greater than 0.",
-            )
-        return True, "OK"
-
+        return _validate_interval_pattern(pattern)
     if schedule_type == "daily":
-        times = pattern.get("times", [])
-        if not isinstance(times, list) or not times:
-            return False, "Daily schedule must include a non-empty list of times."
-        if not all(isinstance(t, str) and parse_time_string(t) for t in times):
-            return False, "Daily times must be in HH:MM format."
-        return True, "OK"
-
+        return _validate_daily_pattern(pattern)
     if schedule_type == "weekly":
-        days = pattern.get("days", [])
-        times = pattern.get("times", [])
-        if not isinstance(days, list) or not days:
-            return False, "Weekly schedule must include a non-empty list of days."
-        if not isinstance(times, list) or not times:
-            return False, "Weekly schedule must include a non-empty list of times."
-        if not all(isinstance(d, str) and d.lower() in WEEKDAY_NAME_TO_INT for d in days):
-            return False, "Weekly days must be weekday names (e.g., monday, tuesday)."
-        if not all(isinstance(t, str) and parse_time_string(t) for t in times):
-            return False, "Weekly times must be in HH:MM format."
-        return True, "OK"
+        return _validate_weekly_pattern(pattern)
 
     return False, "Unknown schedule type. Supported types: interval, daily, weekly."
 
@@ -215,6 +228,5 @@ def _next_weekly_occurrence(
             if candidate_local > after_local:
                 return candidate_local.astimezone(UTC)
 
-    raise ValueError(
-        "Could not compute next weekly occurrence."
-    )  # pragma: no cover  # 14-day search always finds a slot when validate_schedule_pattern accepts the input
+    raise ValueError("Could not compute next weekly occurrence.")  # pragma: no cover
+    # 14-day search always finds a slot when validate_schedule_pattern accepts the input.

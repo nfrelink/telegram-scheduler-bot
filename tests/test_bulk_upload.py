@@ -448,11 +448,13 @@ class TestBulkCollectMedia:
         ctx = _mock_context(bulk_caption_mode="remove")
         update = _mock_update(photo=True)
 
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
-                mock_db.add_staging_item = AsyncMock()
-                result = await bulk_collect_media(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
+            mock_db.add_staging_item = AsyncMock()
+            result = await bulk_collect_media(update, ctx)
 
         assert result == COLLECTING_MEDIA
         posts = ctx.user_data["bulk_posts"]
@@ -465,11 +467,13 @@ class TestBulkCollectMedia:
         ctx = _mock_context(bulk_caption_mode="preserve")
         update = _mock_update(video=True, caption="vid caption")
 
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
-                mock_db.add_staging_item = AsyncMock()
-                result = await bulk_collect_media(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
+            mock_db.add_staging_item = AsyncMock()
+            result = await bulk_collect_media(update, ctx)
 
         assert result == COLLECTING_MEDIA
         posts = ctx.user_data["bulk_posts"]
@@ -481,11 +485,13 @@ class TestBulkCollectMedia:
         ctx = _mock_context(bulk_caption_mode="remove")
         update = _mock_update(document=True)
 
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
-                mock_db.add_staging_item = AsyncMock()
-                result = await bulk_collect_media(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
+            mock_db.add_staging_item = AsyncMock()
+            result = await bulk_collect_media(update, ctx)
 
         assert result == COLLECTING_MEDIA
         assert ctx.user_data["bulk_posts"][0]["media_type"] == "document"
@@ -495,10 +501,12 @@ class TestBulkCollectMedia:
         ctx = _mock_context(bulk_caption_mode="remove")
         update = _mock_update()  # no media at all
 
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
-                result = await bulk_collect_media(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
+            result = await bulk_collect_media(update, ctx)
 
         assert result == COLLECTING_MEDIA
         update.message.reply_text.assert_called_once()
@@ -533,12 +541,14 @@ class TestBulkCollectMedia:
         update1 = _mock_update(photo=True, media_group_id="mg1")
         update2 = _mock_update(video=True, media_group_id="mg1")
 
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
-                mock_db.add_staging_item = AsyncMock()
-                r1 = await bulk_collect_media(update1, ctx)
-                r2 = await bulk_collect_media(update2, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
+            mock_db.add_staging_item = AsyncMock()
+            r1 = await bulk_collect_media(update1, ctx)
+            r2 = await bulk_collect_media(update2, ctx)
 
         assert r1 == COLLECTING_MEDIA
         assert r2 == COLLECTING_MEDIA
@@ -558,11 +568,13 @@ class TestBulkCollectMedia:
         ctx = _mock_context(bulk_caption_mode="remove", bulk_in_confirming=True)
         update = _mock_update(photo=True)
 
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
-                mock_db.add_staging_item = AsyncMock()
-                result = await bulk_collect_media(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
+            mock_db.add_staging_item = AsyncMock()
+            result = await bulk_collect_media(update, ctx)
 
         assert result == COLLECTING_MEDIA
         assert ctx.user_data.get("bulk_in_confirming") is False
@@ -572,11 +584,13 @@ class TestBulkCollectMedia:
         ctx = _mock_context(bulk_caption_mode="remove")
         update = _mock_update(photo=True)
 
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
-                mock_db.add_staging_item = AsyncMock()
-                await bulk_collect_media(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.get_forward_origin_allowlist = AsyncMock(return_value=[])
+            mock_db.add_staging_item = AsyncMock()
+            await bulk_collect_media(update, ctx)
 
         mock_db.add_staging_item.assert_called_once()
         call_kwargs = mock_db.add_staging_item.call_args
@@ -595,10 +609,12 @@ class TestBulkSetCaptionMode:
     async def test_remove_goes_to_collecting(self) -> None:
         ctx = _mock_context(bulk_schedule_id=1)
         update = _mock_update(text="remove")
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.create_bulk_session = AsyncMock()
-                result = await bulk_set_caption_mode(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.create_bulk_session = AsyncMock()
+            result = await bulk_set_caption_mode(update, ctx)
         assert result == COLLECTING_MEDIA
         assert ctx.user_data["bulk_caption_mode"] == "remove"
 
@@ -606,10 +622,12 @@ class TestBulkSetCaptionMode:
     async def test_single_goes_to_waiting_caption(self) -> None:
         ctx = _mock_context(bulk_schedule_id=1)
         update = _mock_update(text="single")
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.create_bulk_session = AsyncMock()
-                result = await bulk_set_caption_mode(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.create_bulk_session = AsyncMock()
+            result = await bulk_set_caption_mode(update, ctx)
         assert result == WAITING_SINGLE_CAPTION
         assert ctx.user_data["bulk_caption_mode"] == "single"
 
@@ -617,10 +635,12 @@ class TestBulkSetCaptionMode:
     async def test_preserve_goes_to_collecting(self) -> None:
         ctx = _mock_context(bulk_schedule_id=1)
         update = _mock_update(text="preserve")
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.create_bulk_session = AsyncMock()
-                result = await bulk_set_caption_mode(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.create_bulk_session = AsyncMock()
+            result = await bulk_set_caption_mode(update, ctx)
         assert result == COLLECTING_MEDIA
 
     @pytest.mark.asyncio
@@ -635,10 +655,12 @@ class TestBulkSetCaptionMode:
     async def test_markdown_alias_maps_to_single(self) -> None:
         ctx = _mock_context(bulk_schedule_id=1)
         update = _mock_update(text="markdown")
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.create_bulk_session = AsyncMock()
-                result = await bulk_set_caption_mode(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.create_bulk_session = AsyncMock()
+            result = await bulk_set_caption_mode(update, ctx)
         assert result == WAITING_SINGLE_CAPTION
         assert ctx.user_data["bulk_caption_mode"] == "single"
 
@@ -646,10 +668,12 @@ class TestBulkSetCaptionMode:
     async def test_session_persisted_to_db(self) -> None:
         ctx = _mock_context(bulk_schedule_id=7)
         update = _mock_update(text="remove")
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.create_bulk_session = AsyncMock()
-                await bulk_set_caption_mode(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.create_bulk_session = AsyncMock()
+            await bulk_set_caption_mode(update, ctx)
         mock_db.create_bulk_session.assert_called_once_with(
             42, schedule_id=7, caption_mode="remove"
         )
@@ -665,10 +689,12 @@ class TestBulkSetSingleCaption:
     async def test_valid_caption_goes_to_collecting(self) -> None:
         ctx = _mock_context()
         update = _mock_update(text="My caption")
-        with patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock):
-            with patch("handlers.bulk_upload.db") as mock_db:
-                mock_db.update_bulk_session_caption = AsyncMock()
-                result = await bulk_set_single_caption(update, ctx)
+        with (
+            patch("handlers.bulk_upload.ensure_user_record", new_callable=AsyncMock),
+            patch("handlers.bulk_upload.db") as mock_db,
+        ):
+            mock_db.update_bulk_session_caption = AsyncMock()
+            result = await bulk_set_single_caption(update, ctx)
         assert result == COLLECTING_MEDIA
         assert ctx.user_data["bulk_single_caption"] == "My caption"
 
@@ -836,13 +862,12 @@ class TestBulkConfirmAutoResume:
 
     @staticmethod
     def _ctx_with_posts() -> MagicMock:
-        ctx = _mock_context(
+        return _mock_context(
             bulk_schedule_id=7,
             bulk_channel_db_id=3,
             bulk_posts=[{"media_type": "photo", "file_id": "fid_1"}],
             bulk_fingerprint_data=[],
         )
-        return ctx
 
     @staticmethod
     async def _run(ctx: MagicMock, schedule_state: str) -> tuple[AsyncMock, AsyncMock, int]:

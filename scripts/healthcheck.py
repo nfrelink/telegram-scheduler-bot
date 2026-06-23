@@ -31,6 +31,5 @@ if __name__ == "__main__":
     try:
         check_db()
         check_telegram()
-    except Exception as e:
-        print(f"UNHEALTHY: {e}", file=sys.stderr)
+    except Exception:
         sys.exit(1)

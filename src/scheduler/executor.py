@@ -7,7 +7,7 @@ import logging
 import os
 import re
 import uuid
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from pathlib import Path
 from typing import Any
 
@@ -66,14 +66,11 @@ async def send_post(
                 from_chat_id=int(forward_from_chat_id),
                 message_id=int(forward_from_message_id),
             )
-            return True, None, True
         except Exception as e:
-            logger.error(
-                "Failed to forward post id=%s to channel=%s: %s",
+            logger.exception(
+                "Failed to forward post id=%s to channel=%s",
                 post.get("id"),
                 telegram_channel_id,
-                e,
-                exc_info=True,
                 extra={
                     "event": "forward_failed",
                     "post_id": post.get("id"),
@@ -83,6 +80,8 @@ async def send_post(
                 },
             )
             return False, _format_error(e), True
+        else:
+            return True, None, True
 
     media_type = post.get("media_type")
     caption = post.get("caption")
@@ -104,14 +103,11 @@ async def send_post(
             file_id=file_id,
             file_path=file_path,
         )
-        return True, None, True
     except _PermanentSendError as e:
-        logger.error(
-            "Failed to send post id=%s to channel=%s: %s",
+        logger.exception(
+            "Failed to send post id=%s to channel=%s",
             post.get("id"),
             telegram_channel_id,
-            e,
-            exc_info=True,
             extra={
                 "event": "send_failed",
                 "post_id": post.get("id"),
@@ -139,12 +135,10 @@ async def send_post(
             if ok:
                 return True, None, True
 
-        logger.error(
-            "Failed to send post id=%s to channel=%s: %s",
+        logger.exception(
+            "Failed to send post id=%s to channel=%s",
             post.get("id"),
             telegram_channel_id,
-            e,
-            exc_info=True,
             extra={
                 "event": "send_failed",
                 "post_id": post.get("id"),
@@ -153,6 +147,8 @@ async def send_post(
             },
         )
         return False, _format_error(e), True
+    else:
+        return True, None, True
 
 
 def _format_error(exc: Exception) -> str:
@@ -185,12 +181,12 @@ async def _send_post_once(
         method_name, media_kwarg = _SINGLE_SEND[media_type]
         method = getattr(bot, method_name)
         payload = _resolve_file_ref(file_id=file_id, file_path=file_path)
-        kwargs = dict(
-            chat_id=telegram_channel_id,
-            caption=caption,
-            parse_mode=parse_mode,
-            caption_entities=entities,
-        )
+        kwargs = {
+            "chat_id": telegram_channel_id,
+            "caption": caption,
+            "parse_mode": parse_mode,
+            "caption_entities": entities,
+        }
         if isinstance(payload, Path):
             with payload.open("rb") as f:
                 await method(**{media_kwarg: f}, **kwargs)
@@ -207,7 +203,8 @@ async def _send_post_once(
             forward_refs = _parse_media_group_forward_refs(media_group_data)
             if forward_refs is not None:
                 from_chat_id, message_ids = forward_refs
-                # Use forward_messages so Telegram can preserve grouping/attribution as much as possible.
+                # Use forward_messages so Telegram can preserve grouping/attribution
+                # as much as possible.
                 result = await bot.forward_messages(
                     chat_id=telegram_channel_id,
                     from_chat_id=from_chat_id,
@@ -274,21 +271,18 @@ async def _retry_with_download(
             media_type,
             extra={"event": "send_recovered_via_download", "media_type": media_type},
         )
-        return True
-    except Exception as e:
-        logger.error(
-            "Download fallback failed for media_type=%s: %s",
+    except Exception:
+        logger.exception(
+            "Download fallback failed for media_type=%s",
             media_type,
-            e,
-            exc_info=True,
             extra={"event": "download_fallback_failed", "media_type": media_type},
         )
         return False
+    else:
+        return True
     finally:
-        try:
+        with suppress(Exception):
             tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
 
 def _resolve_file_ref(*, file_id: str | None, file_path: str | None) -> str | Path:
@@ -320,7 +314,7 @@ def _parse_media_group(
     media: list[InputMediaPhoto | InputMediaVideo | InputMediaDocument] = []
     for item in items:
         if not isinstance(item, dict):
-            raise ValueError("media_group_data items must be objects")
+            raise TypeError("media_group_data items must be objects")
 
         media_type = item.get("media_type")
         caption = item.get("caption")
@@ -359,6 +353,22 @@ def _parse_media_group_forward_refs(
 
     Otherwise returns None (meaning: send as a copied media group).
     """
+    pairs = _collect_media_group_forward_pairs(media_group_data)
+    if pairs is None:
+        return None
+
+    base_from = pairs[0][0]
+    if any(fc != base_from for (fc, _mid) in pairs):
+        return None
+
+    # Stable order for forwarding: ascending by message_id in the source chat.
+    message_ids = [mid for (_fc, mid) in sorted(pairs, key=lambda p: p[1])]
+    return base_from, message_ids
+
+
+def _collect_media_group_forward_pairs(
+    media_group_data: str,
+) -> list[tuple[int, int]] | None:
     try:
         items = json.loads(media_group_data)
     except Exception:
@@ -380,13 +390,7 @@ def _parse_media_group_forward_refs(
         except TypeError, ValueError:
             return None
 
-    base_from = pairs[0][0]
-    if any(fc != base_from for (fc, _mid) in pairs):
-        return None
-
-    # Stable order for forwarding: ascending by message_id in the source chat.
-    message_ids = [mid for (_fc, mid) in sorted(pairs, key=lambda p: p[1])]
-    return base_from, message_ids
+    return pairs
 
 
 def _to_parse_mode(value: str | None) -> str | None:
@@ -424,6 +428,7 @@ def _decode_entities(value: Any) -> list[MessageEntity] | None:
             try:
                 entities.append(MessageEntity.de_json(raw, bot=None))  # type: ignore[arg-type]
             except Exception:
+                logger.debug("Skipping invalid caption entity payload: %r", raw, exc_info=True)
                 continue
 
     return entities or None

@@ -18,6 +18,8 @@ from utils.tg_text import utf16_len
 
 logger = logging.getLogger(__name__)
 
+_MIN_COMMAND_PARTS = 2
+
 
 def _extract_command_payload(
     message: Message,
@@ -28,7 +30,7 @@ def _extract_command_payload(
         return None, None
 
     parts = text.split(maxsplit=1)
-    if len(parts) < 2:
+    if len(parts) < _MIN_COMMAND_PARTS:
         return None, None
 
     # Preserve message as-is after the first whitespace following the command token.
@@ -133,6 +135,10 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     uptime = _format_uptime(_get_uptime_seconds(context))
 
+    active_schedules = schedule_states.get("active", 0)
+    paused_schedules = schedule_states.get("paused", 0)
+    empty_paused_schedules = schedule_states.get("empty_paused", 0)
+
     msg = (
         "System status (UTC)\n"
         f"- Uptime: {uptime}\n"
@@ -143,7 +149,8 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"- Users (total): {stats['total_users']}\n"
         f"- Users (active 90d): {active_users}\n"
         f"- Channels (active): {stats['total_channels']}\n"
-        f"- Schedules: active={schedule_states.get('active', 0)}, paused={schedule_states.get('paused', 0)}, empty_paused={schedule_states.get('empty_paused', 0)}\n"
+        f"- Schedules: active={active_schedules}, paused={paused_schedules}, "
+        f"empty_paused={empty_paused_schedules}\n"
         f"- Queued posts: {stats['queued_posts']}\n"
         f"- Failed queued posts (retry_count>0): {stats['failed_posts']}\n"
     )
@@ -151,7 +158,7 @@ async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @admin_only
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def stats_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     if update.message is None:
         return
 
@@ -213,9 +220,9 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 entities=payload_entities,
             )
             ok += 1
-        except Exception as e:
+        except Exception:
             failed += 1
-            logger.error("Broadcast failed for user_id=%s: %s", user_id, e, exc_info=True)
+            logger.exception("Broadcast failed for user_id=%s", user_id)
         await asyncio.sleep(0.1)
 
     await update.message.reply_text(f"Broadcast complete. Success: {ok}. Failed: {failed}.")

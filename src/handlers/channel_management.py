@@ -9,8 +9,9 @@ Add puts the conversation into AWAITING_ADD where the user types a channel ID or
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatType
 from telegram.ext import (
     CallbackQueryHandler,
@@ -22,7 +23,7 @@ from telegram.ext import (
 )
 
 from database import queries as db
-from handlers.common import ensure_user_record
+from handlers.common import ensure_user_record, safe_edit_message_text
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
@@ -77,11 +78,53 @@ async def _get_bot_id(context: ContextTypes.DEFAULT_TYPE) -> int:
     return int(me.id)
 
 
+async def _verify_channel_admin_access(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    user_id: int,
+    telegram_channel_id: str,
+    reply_fn: Callable[..., Awaitable[None]],
+) -> bool:
+    """Return True when bot and user have admin access to post."""
+    try:
+        bot_id = await _get_bot_id(context)
+        bot_member = await context.bot.get_chat_member(chat_id, bot_id)
+        if bot_member.status not in ("administrator", "creator"):
+            await reply_fn(
+                "I am not an admin in that channel.\n"
+                "Add me as an administrator with posting permission first."
+            )
+            return False
+        if bot_member.status == "administrator" and not getattr(
+            bot_member, "can_post_messages", True
+        ):
+            await reply_fn(
+                "I am an admin but do not have permission to post messages.\n"
+                "Please grant me posting permission."
+            )
+            return False
+        user_member = await context.bot.get_chat_member(chat_id, user_id)
+        if user_member.status not in ("administrator", "creator"):
+            await reply_fn("You are not an admin of that channel.")
+            return False
+    except Exception:
+        logger.exception(
+            "Admin check failed for channel %s user %s",
+            telegram_channel_id,
+            user_id,
+        )
+        await reply_fn(
+            "Could not verify permissions. Make sure you added me as administrator and try again."
+        )
+        return False
+    return True
+
+
 async def _run_add_flow(
     raw: str,
     user_id: int,
     context: ContextTypes.DEFAULT_TYPE,
-    reply_fn,  # type: ignore[no-untyped-def]
+    reply_fn: Callable[..., Awaitable[None]],
 ) -> None:
     """Resolve, admin-check, and issue a verification code for a channel.
 
@@ -120,37 +163,9 @@ async def _run_add_flow(
         await reply_fn(text, entities=entities)
         return
 
-    try:
-        bot_id = await _get_bot_id(context)
-        bot_member = await context.bot.get_chat_member(chat.id, bot_id)
-        if bot_member.status not in ("administrator", "creator"):
-            await reply_fn(
-                "I am not an admin in that channel.\n"
-                "Add me as an administrator with posting permission first."
-            )
-            return
-        if bot_member.status == "administrator" and not getattr(
-            bot_member, "can_post_messages", True
-        ):
-            await reply_fn(
-                "I am an admin but do not have permission to post messages.\n"
-                "Please grant me posting permission."
-            )
-            return
-        user_member = await context.bot.get_chat_member(chat.id, user_id)
-        if user_member.status not in ("administrator", "creator"):
-            await reply_fn("You are not an admin of that channel.")
-            return
-    except Exception as e:
-        logger.error(
-            "Admin check failed for channel %s user %s: %s",
-            telegram_channel_id,
-            user_id,
-            e,
-        )
-        await reply_fn(
-            "Could not verify permissions. Make sure you added me as administrator and try again."
-        )
+    if not await _verify_channel_admin_access(
+        context, chat.id, user_id, telegram_channel_id, reply_fn
+    ):
         return
 
     code = await db.create_verification_code(
@@ -163,6 +178,103 @@ async def _run_add_flow(
         "The bot will detect it automatically. The code expires in 10 minutes."
     )
     logger.info("User %s: issued verification code for channel %s", user_id, telegram_channel_id)
+
+
+def _ch_parse_id(data: str, prefix: str) -> int | None:
+    if not data.startswith(prefix):
+        return None
+    try:
+        return int(data[len(prefix) :])
+    except ValueError:
+        return None
+
+
+async def _ch_add(_query: CallbackQuery, _user_id: int, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    await safe_edit_message_text(
+        _query,
+        "Send the channel ID (e.g. -100123456789) or @handle, "
+        "or forward any message from the channel here.\n\n"
+        "/cancel to abort.",
+    )
+    return _AWAITING_ADD
+
+
+async def _ch_rm(query: CallbackQuery, user_id: int, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    ch_id = _ch_parse_id(query.data or "", "ch:rm:")
+    if ch_id is None:
+        return _SHOWING
+
+    channels = await db.get_user_channels(user_id)
+    owned = {int(c["id"]): c for c in channels}
+    if ch_id not in owned:
+        await query.answer("Channel not found.", show_alert=True)
+        return _SHOWING
+
+    ch = owned[ch_id]
+    name = str(ch.get("channel_name") or f"Channel {ch_id}")
+    schedules = await db.get_channel_schedules(ch_id)
+    n_sched = len(schedules)
+    n_posts = await db.get_channel_queue_count(ch_id)
+
+    lines = [f"Remove '{name}'?"]
+    if n_sched or n_posts:
+        lines.append(f"This will also delete {n_sched} schedule(s) and {n_posts} queued post(s).")
+    await safe_edit_message_text(
+        query,
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Yes, remove", callback_data=f"ch:rmok:{ch_id}"),
+                    InlineKeyboardButton("Cancel", callback_data="ch:back"),
+                ]
+            ]
+        ),
+    )
+    return _SHOWING
+
+
+async def _ch_rmok(query: CallbackQuery, user_id: int, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    ch_id = _ch_parse_id(query.data or "", "ch:rmok:")
+    if ch_id is None:
+        return _SHOWING
+
+    channel = await db.get_channel_by_id_for_user(user_id, ch_id)
+    if channel is None:
+        await query.answer("Channel not found.", show_alert=True)
+        return _SHOWING
+
+    ch_name = str(channel.get("channel_name") or f"Channel {ch_id}")
+    await db.delete_channel(ch_id, user_id=user_id)
+    logger.info("User %s removed channel db_id=%s (%s)", user_id, ch_id, ch_name)
+
+    text, keyboard = await _channels_list_text_and_keyboard(user_id)
+    await safe_edit_message_text(query, text, reply_markup=keyboard)
+    return ConversationHandler.END
+
+
+async def _ch_back(query: CallbackQuery, user_id: int, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    text, keyboard = await _channels_list_text_and_keyboard(user_id)
+    await safe_edit_message_text(query, text, reply_markup=keyboard)
+    return _SHOWING
+
+
+async def _ch_noop(
+    _query: CallbackQuery, _user_id: int, _context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    return _SHOWING
+
+
+_CH_EXACT_HANDLERS: dict[str, object] = {
+    "ch:add": _ch_add,
+    "ch:back": _ch_back,
+    "ch:noop": _ch_noop,
+}
+
+_CH_PREFIX_HANDLERS: tuple[tuple[str, object], ...] = (
+    ("ch:rm:", _ch_rm),
+    ("ch:rmok:", _ch_rmok),
+)
 
 
 async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -178,7 +290,7 @@ async def channels_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return _SHOWING
 
 
-async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def channels_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle ch:* inline keyboard callbacks."""
     query = update.callback_query
     if query is None or update.effective_user is None:
@@ -188,87 +300,14 @@ async def channels_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     data = query.data or ""
     user_id = update.effective_user.id
 
-    if data == "ch:add":
-        try:
-            await query.edit_message_text(
-                "Send the channel ID (e.g. -100123456789) or @handle, "
-                "or forward any message from the channel here.\n\n"
-                "/cancel to abort."
-            )
-        except Exception:
-            pass
-        return _AWAITING_ADD
+    exact = _CH_EXACT_HANDLERS.get(data)
+    if exact is not None:
+        return await exact(query, user_id, _context)  # type: ignore[operator]
 
-    if data.startswith("ch:rm:"):
-        try:
-            ch_id = int(data[6:])
-        except ValueError:
-            return _SHOWING
+    for prefix, handler in _CH_PREFIX_HANDLERS:
+        if data.startswith(prefix):
+            return await handler(query, user_id, _context)  # type: ignore[operator]
 
-        channels = await db.get_user_channels(user_id)
-        owned = {int(c["id"]): c for c in channels}
-        if ch_id not in owned:
-            await query.answer("Channel not found.", show_alert=True)
-            return _SHOWING
-
-        ch = owned[ch_id]
-        name = str(ch.get("channel_name") or f"Channel {ch_id}")
-        schedules = await db.get_channel_schedules(ch_id)
-        n_sched = len(schedules)
-        n_posts = await db.get_channel_queue_count(ch_id)
-
-        lines = [f"Remove '{name}'?"]
-        if n_sched or n_posts:
-            lines.append(
-                f"This will also delete {n_sched} schedule(s) and {n_posts} queued post(s)."
-            )
-        try:
-            await query.edit_message_text(
-                "\n".join(lines),
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton("Yes, remove", callback_data=f"ch:rmok:{ch_id}"),
-                            InlineKeyboardButton("Cancel", callback_data="ch:back"),
-                        ]
-                    ]
-                ),
-            )
-        except Exception:
-            pass
-        return _SHOWING
-
-    if data.startswith("ch:rmok:"):
-        try:
-            ch_id = int(data[8:])
-        except ValueError:
-            return _SHOWING
-
-        channel = await db.get_channel_by_id_for_user(user_id, ch_id)
-        if channel is None:
-            await query.answer("Channel not found.", show_alert=True)
-            return _SHOWING
-
-        ch_name = str(channel.get("channel_name") or f"Channel {ch_id}")
-        await db.delete_channel(ch_id, user_id=user_id)
-        logger.info("User %s removed channel db_id=%s (%s)", user_id, ch_id, ch_name)
-
-        text, keyboard = await _channels_list_text_and_keyboard(user_id)
-        try:
-            await query.edit_message_text(text, reply_markup=keyboard)
-        except Exception:
-            pass
-        return ConversationHandler.END
-
-    if data == "ch:back":
-        text, keyboard = await _channels_list_text_and_keyboard(user_id)
-        try:
-            await query.edit_message_text(text, reply_markup=keyboard)
-        except Exception:
-            pass
-        return _SHOWING
-
-    # ch:noop and unknown — do nothing.
     return _SHOWING
 
 
@@ -305,7 +344,7 @@ async def channels_add_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     return ConversationHandler.END
 
 
-async def channels_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def channels_cancel(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancel the /channels conversation."""
     if update.message is not None:
         await update.message.reply_text("Cancelled.")

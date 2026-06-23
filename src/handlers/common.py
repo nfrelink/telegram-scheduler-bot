@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from telegram import Update
+from telegram import CallbackQuery, Update
 from telegram.ext import ContextTypes
 
 from database import queries as db
@@ -33,7 +34,25 @@ def parse_int(text: str) -> int | None:
         return None
 
 
-async def ensure_user_record(update: Update, context: ContextTypes.DEFAULT_TYPE) -> dict:
+async def safe_edit_message_text(query: CallbackQuery, *args: Any, **kwargs: Any) -> None:
+    """Edit callback message text; ignore Telegram errors (stale/deleted messages)."""
+    with contextlib.suppress(Exception):
+        await query.edit_message_text(*args, **kwargs)
+
+
+async def safe_edit_message_caption(query: CallbackQuery, *args: Any, **kwargs: Any) -> None:
+    """Edit callback message caption; ignore Telegram errors (stale/deleted messages)."""
+    with contextlib.suppress(Exception):
+        await query.edit_message_caption(*args, **kwargs)
+
+
+async def safe_edit_message_media(query: CallbackQuery, *args: Any, **kwargs: Any) -> None:
+    """Edit callback message media; ignore Telegram errors (stale/deleted messages)."""
+    with contextlib.suppress(Exception):
+        await query.edit_message_media(*args, **kwargs)
+
+
+async def ensure_user_record(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> dict:
     """Upsert the current user and mark last_active_at."""
     user = update.effective_user
     if user is None:

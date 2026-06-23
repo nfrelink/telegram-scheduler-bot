@@ -229,16 +229,18 @@ class TestNewScheduleSetInterval:
     async def test_valid_interval_finalizes(self) -> None:
         ctx = _mock_context(ns_channel_db_id=1, ns_name="Test", ns_timezone="UTC")
         update = _mock_update(text="2h")
-        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
-            with patch(
+        with (
+            patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock),
+            patch(
                 "handlers.schedule_management.scheduling.create",
                 new_callable=AsyncMock,
                 return_value={"id": 1},
-            ):
-                with patch("handlers.schedule_management.db") as mock_db:
-                    mock_db.set_user_context = AsyncMock()
-                    mock_db.get_user_context = AsyncMock(return_value={})
-                    result = await newschedule_set_interval(update, ctx)
+            ),
+            patch("handlers.schedule_management.db") as mock_db,
+        ):
+            mock_db.set_user_context = AsyncMock()
+            mock_db.get_user_context = AsyncMock(return_value={})
+            result = await newschedule_set_interval(update, ctx)
         assert result == ConversationHandler.END
 
     @pytest.mark.asyncio
@@ -255,16 +257,18 @@ class TestNewScheduleSetDailyTimes:
     async def test_valid_times_finalizes(self) -> None:
         ctx = _mock_context(ns_channel_db_id=1, ns_name="Daily", ns_timezone="UTC")
         update = _mock_update(text="09:00,16:00")
-        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
-            with patch(
+        with (
+            patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock),
+            patch(
                 "handlers.schedule_management.scheduling.create",
                 new_callable=AsyncMock,
                 return_value={"id": 2},
-            ):
-                with patch("handlers.schedule_management.db") as mock_db:
-                    mock_db.set_user_context = AsyncMock()
-                    mock_db.get_user_context = AsyncMock(return_value={})
-                    result = await newschedule_set_daily_times(update, ctx)
+            ),
+            patch("handlers.schedule_management.db") as mock_db,
+        ):
+            mock_db.set_user_context = AsyncMock()
+            mock_db.get_user_context = AsyncMock(return_value={})
+            result = await newschedule_set_daily_times(update, ctx)
         assert result == ConversationHandler.END
 
     @pytest.mark.asyncio
@@ -305,16 +309,18 @@ class TestNewScheduleSetWeeklyTimes:
             ns_days=["monday"],
         )
         update = _mock_update(text="12:00")
-        with patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock):
-            with patch(
+        with (
+            patch("handlers.schedule_management.ensure_user_record", new_callable=AsyncMock),
+            patch(
                 "handlers.schedule_management.scheduling.create",
                 new_callable=AsyncMock,
                 return_value={"id": 3},
-            ):
-                with patch("handlers.schedule_management.db") as mock_db:
-                    mock_db.set_user_context = AsyncMock()
-                    mock_db.get_user_context = AsyncMock(return_value={})
-                    result = await newschedule_set_weekly_times(update, ctx)
+            ),
+            patch("handlers.schedule_management.db") as mock_db,
+        ):
+            mock_db.set_user_context = AsyncMock()
+            mock_db.get_user_context = AsyncMock(return_value={})
+            result = await newschedule_set_weekly_times(update, ctx)
         assert result == ConversationHandler.END
 
     @pytest.mark.asyncio

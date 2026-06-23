@@ -55,9 +55,7 @@ async def should_check(*, channel_db_id: int, user_id: int) -> bool:
     """
     if not await is_channel_scanning_enabled(channel_db_id):
         return False
-    if not await is_user_alerts_enabled(user_id):
-        return False
-    return True
+    return await is_user_alerts_enabled(user_id)
 
 
 # ---------------------------------------------------------------------------

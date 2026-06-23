@@ -11,7 +11,7 @@ from scheduler import engine
 
 
 @pytest.mark.asyncio
-async def test_catch_up_sets_scheduled_for_with_spacing(initialized_db) -> None:
+async def test_catch_up_sets_scheduled_for_with_spacing(_initialized_db) -> None:
     user_id = 1000
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False

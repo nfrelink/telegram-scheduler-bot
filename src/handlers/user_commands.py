@@ -8,6 +8,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from database import queries as db
+from handlers.selection import selection_segments
 from utils.tg_text import Segment, render
 
 from .common import ensure_user_record
@@ -64,7 +65,10 @@ async def _pending_upload_nudge(user_id: int) -> str | None:
     count = await db.get_staging_count(user_id)
     if count <= 0:
         return None
-    return f"You have {count} item(s) from an interrupted upload. Send /bulk to resume or discard them."
+    return (
+        f"You have {count} item(s) from an interrupted upload. "
+        "Send /bulk to resume or discard them."
+    )
 
 
 async def _onboarding_nudge(user_id: int) -> str | None:
@@ -110,8 +114,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         ]
 
         if details.get("telegram_channel_id") or details.get("selected_schedule_id"):
-            from handlers.selection import selection_segments  # local import
-
             segments += [Segment("\n"), *selection_segments(details)]
 
         text, entities = render(segments)
@@ -133,8 +135,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await update.message.reply_text(upload_nudge)
 
         logger.info("Handled /start for user_id=%s", user_id)
-    except Exception as e:
-        logger.error("Error in start_command for user_id=%s: %s", user_id, e, exc_info=True)
+    except Exception:
+        logger.exception("Error in start_command for user_id=%s", user_id)
         await update.message.reply_text("An error occurred. Please try again.")
 
 
@@ -151,8 +153,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
     if details.get("telegram_channel_id") or details.get("selected_schedule_id"):
-        from handlers.selection import selection_segments  # local import
-
         segments = [Segment(help_text), Segment("\n\n"), *selection_segments(details)]
         text, entities = render(segments)
         await update.message.reply_text(text, entities=entities)

@@ -12,7 +12,7 @@ from database.time import parse_timestamp, to_sqlite_timestamp
 
 @pytest.mark.asyncio
 async def test_add_queued_posts_bulk_appends_and_compacts_positions(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     user_id = 123
     await db.upsert_user(
@@ -61,7 +61,7 @@ async def test_add_queued_posts_bulk_appends_and_compacts_positions(
 
 
 @pytest.mark.asyncio
-async def test_add_queued_posts_bulk_persists_forward_metadata(initialized_db) -> None:
+async def test_add_queued_posts_bulk_persists_forward_metadata(_initialized_db) -> None:
     user_id = 777
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -102,7 +102,7 @@ async def test_add_queued_posts_bulk_persists_forward_metadata(initialized_db) -
 
 
 @pytest.mark.asyncio
-async def test_forward_origin_allowlist_roundtrip(initialized_db) -> None:
+async def test_forward_origin_allowlist_roundtrip(_initialized_db) -> None:
     user_id = 888
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -124,7 +124,7 @@ async def test_forward_origin_allowlist_roundtrip(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_scheduled_for_helpers_and_earliest(initialized_db) -> None:
+async def test_scheduled_for_helpers_and_earliest(_initialized_db) -> None:
     user_id = 456
     await db.upsert_user(
         user_id=user_id, username="u2", first_name="f2", last_name="l2", is_admin=False
@@ -176,7 +176,7 @@ async def test_scheduled_for_helpers_and_earliest(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_active_users_and_delivery_stats_daily(initialized_db) -> None:
+async def test_active_users_and_delivery_stats_daily(_initialized_db) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     old = now - timedelta(days=120)
 
@@ -208,7 +208,7 @@ async def test_active_users_and_delivery_stats_daily(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_user_context_selection_roundtrip(initialized_db) -> None:
+async def test_user_context_selection_roundtrip(_initialized_db) -> None:
     user_id = 999
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -261,7 +261,7 @@ async def test_user_context_selection_roundtrip(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bulk_staging_session_lifecycle(initialized_db) -> None:
+async def test_bulk_staging_session_lifecycle(_initialized_db) -> None:
     user_id = 600
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -285,7 +285,7 @@ async def test_bulk_staging_session_lifecycle(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bulk_staging_items_lifecycle(initialized_db) -> None:
+async def test_bulk_staging_items_lifecycle(_initialized_db) -> None:
     user_id = 601
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -316,7 +316,7 @@ async def test_bulk_staging_items_lifecycle(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fingerprint_insert_and_query_by_file_unique_id(initialized_db) -> None:
+async def test_fingerprint_insert_and_query_by_file_unique_id(_initialized_db) -> None:
     user_id = 700
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -357,7 +357,7 @@ async def test_fingerprint_insert_and_query_by_file_unique_id(initialized_db) ->
 
 
 @pytest.mark.asyncio
-async def test_get_channel_dhashes(initialized_db) -> None:
+async def test_get_channel_dhashes(_initialized_db) -> None:
     user_id = 701
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -401,7 +401,7 @@ async def test_get_channel_dhashes(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_mark_fingerprint_posted_and_delete_unposted(initialized_db) -> None:
+async def test_mark_fingerprint_posted_and_delete_unposted(_initialized_db) -> None:
     user_id = 702
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -415,7 +415,7 @@ async def test_mark_fingerprint_posted_and_delete_unposted(initialized_db) -> No
         pattern={"type": "interval", "hours": 1},
     )
     ch_id = int(channel["id"])
-    count, post_ids = await db.add_queued_posts_bulk(
+    _count, post_ids = await db.add_queued_posts_bulk(
         int(schedule["id"]),
         [
             {"media_type": "photo", "file_id": "pf1"},
@@ -460,7 +460,7 @@ async def test_mark_fingerprint_posted_and_delete_unposted(initialized_db) -> No
 
 
 @pytest.mark.asyncio
-async def test_duplicate_detection_settings_toggle(initialized_db) -> None:
+async def test_duplicate_detection_settings_toggle(_initialized_db) -> None:
     user_id = 703
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -484,7 +484,7 @@ async def test_duplicate_detection_settings_toggle(initialized_db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bulk_staging_items_preserve_all_fields(initialized_db) -> None:
+async def test_bulk_staging_items_preserve_all_fields(_initialized_db) -> None:
     user_id = 602
     await db.upsert_user(
         user_id=user_id, username="u", first_name="f", last_name="l", is_admin=False
@@ -547,13 +547,13 @@ async def _mk_schedule_for_count(user_id: int, suffix: str, *, state: str = "act
 
 
 @pytest.mark.asyncio
-async def test_count_queued_posts_returns_zero_when_empty(initialized_db) -> None:
+async def test_count_queued_posts_returns_zero_when_empty(_initialized_db) -> None:
     sid = await _mk_schedule_for_count(9001, "9001")
     assert await db.count_queued_posts(sid) == 0
 
 
 @pytest.mark.asyncio
-async def test_count_queued_posts_counts_existing_rows(initialized_db) -> None:
+async def test_count_queued_posts_counts_existing_rows(_initialized_db) -> None:
     sid = await _mk_schedule_for_count(9002, "9002")
     await db.add_queued_posts_bulk(
         sid, [{"media_type": "photo", "file_id": f"f{i}"} for i in range(5)]
@@ -563,7 +563,7 @@ async def test_count_queued_posts_counts_existing_rows(initialized_db) -> None:
 
 @pytest.mark.asyncio
 async def test_get_latest_active_schedule_run_at_with_no_active_schedules(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     """Paused schedules are explicitly excluded — only active ones count
     against the heartbeat timer."""
@@ -579,7 +579,7 @@ async def test_get_latest_active_schedule_run_at_with_no_active_schedules(
 
 @pytest.mark.asyncio
 async def test_get_latest_active_schedule_run_at_returns_max_across_active(
-    initialized_db,
+    _initialized_db,
 ) -> None:
     sid_a = await _mk_schedule_for_count(9004, "9004a")
     sid_b = await _mk_schedule_for_count(9004, "9004b")

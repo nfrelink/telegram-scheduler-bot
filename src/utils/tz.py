@@ -37,9 +37,10 @@ def is_valid_timezone(tz_name: str) -> bool:
         return True
     try:
         ZoneInfo(tz_name)
-        return True
     except Exception:
         return False
+    else:
+        return True
 
 
 def suggest_timezones(name: str, *, limit: int = 3) -> list[str]:

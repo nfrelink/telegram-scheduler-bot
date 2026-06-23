@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import logging
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -127,8 +128,6 @@ def test_calculate_next_run_rejects_custom() -> None:
 # calculate_next_run defaults and naive `after`.
 # ---------------------------------------------------------------------------
 
-from datetime import timedelta  # noqa: E402
-
 from scheduler.timing import _get_timezone  # noqa: E402
 
 
@@ -146,8 +145,6 @@ def test_get_timezone_explicit_utc_short_circuits() -> None:
 
 
 def test_get_timezone_unknown_zone_falls_back_to_utc(caplog) -> None:
-    import logging
-
     with caplog.at_level(logging.WARNING, logger="scheduler.timing"):
         tz = _get_timezone("Mars/Olympus_Mons")
     assert tz is UTC
@@ -158,8 +155,6 @@ def test_get_timezone_unknown_zone_falls_back_to_utc(caplog) -> None:
 
 def test_get_timezone_non_string_falls_back_to_utc(caplog) -> None:
     """Defensive: a non-string value triggers the generic Exception branch."""
-    import logging
-
     with caplog.at_level(logging.WARNING, logger="scheduler.timing"):
         tz = _get_timezone(12345)  # type: ignore[arg-type]
     assert tz is UTC
@@ -201,7 +196,7 @@ def test_calculate_next_run_uses_now_when_after_omitted() -> None:
 
 def test_calculate_next_run_promotes_naive_after_to_utc() -> None:
     """A naive datetime is treated as UTC rather than rejected."""
-    naive = datetime(2026, 4, 20, 12, 0)
+    naive = datetime(2026, 4, 20, 12, 0, tzinfo=UTC).replace(tzinfo=None)
     schedule = {"pattern": {"type": "interval", "minutes": 5}, "timezone": "UTC"}
     out = calculate_next_run(schedule, after=naive)
     assert out == datetime(2026, 4, 20, 12, 5, tzinfo=UTC)

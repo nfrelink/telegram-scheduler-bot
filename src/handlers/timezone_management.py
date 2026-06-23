@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from database import queries as db
-from handlers.common import ensure_user_record
+from handlers.common import ensure_user_record, safe_edit_message_text
 from utils.tz import default_timezone_name, is_valid_timezone, suggest_timezones
 
 
@@ -40,6 +40,7 @@ _CB_REGIONS = "tz:regions"
 _CB_REGION_PREFIX = "tz:r:"  # + region key
 _CB_SET_PREFIX = "tz:s:"  # + IANA name (use data[len(_CB_SET_PREFIX):] to extract)
 _CB_MANUAL = "tz:manual"
+_TZ_BUTTONS_PER_ROW = 2
 
 # ---------------------------------------------------------------------------
 # Region / timezone data
@@ -124,11 +125,10 @@ def _region_keyboard(region_key: str) -> InlineKeyboardMarkup | None:
         return None
     _, timezones = _REGIONS[region_key]
     rows: list[list[InlineKeyboardButton]] = []
-    # Two buttons per row.
     pair: list[InlineKeyboardButton] = []
     for label, iana in timezones:
         pair.append(InlineKeyboardButton(label, callback_data=f"{_CB_SET_PREFIX}{iana}"))
-        if len(pair) == 2:
+        if len(pair) == _TZ_BUTTONS_PER_ROW:
             rows.append(pair)
             pair = []
     if pair:
@@ -232,7 +232,80 @@ async def settimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 # ---------------------------------------------------------------------------
 
 
-async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def _tz_regions(
+    query: CallbackQuery, _user_id: int, _context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await safe_edit_message_text(
+        query,
+        "Select your timezone region:",
+        reply_markup=_regions_keyboard(),
+    )
+
+
+async def _tz_region(
+    query: CallbackQuery, _user_id: int, _context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    data = query.data or ""
+    region_key = data[len(_CB_REGION_PREFIX) :]
+    keyboard = _region_keyboard(region_key)
+    if keyboard is None:
+        await query.edit_message_text(
+            "Unknown region. Please try again.", reply_markup=_regions_keyboard()
+        )
+        return
+    region_label = _REGIONS[region_key][0]
+    await safe_edit_message_text(
+        query,
+        f"{region_label} — select your timezone:",
+        reply_markup=keyboard,
+    )
+
+
+async def _tz_set(query: CallbackQuery, user_id: int, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    data = query.data or ""
+    iana_name = data[len(_CB_SET_PREFIX) :]
+    if not is_valid_timezone(iana_name):
+        await safe_edit_message_text(
+            query,
+            _unknown_timezone_message(iana_name, include_guided_hint=False)
+            + "\n\nPlease select again.",
+            reply_markup=_regions_keyboard(),
+        )
+        return
+
+    await db.set_user_timezone(user_id, iana_name)
+    logger.info("User %s set timezone to %r (via inline)", user_id, iana_name)
+    await safe_edit_message_text(
+        query,
+        f"Timezone set to {iana_name}.\n"
+        f"All date and time displays will use this timezone.\n"
+        f"You can change it anytime with /timezone.",
+    )
+
+
+async def _tz_manual(
+    query: CallbackQuery, _user_id: int, _context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    await safe_edit_message_text(
+        query,
+        "To set a custom timezone, send:\n"
+        "/settimezone <IANA name>\n\n"
+        "Examples:\n"
+        "  /settimezone Europe/Amsterdam\n"
+        "  /settimezone Asia/Kolkata\n"
+        "  /settimezone America/New_York\n\n"
+        "Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones",
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("< Back", callback_data=_CB_REGIONS),
+                ]
+            ]
+        ),
+    )
+
+
+async def timezone_callback(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all tz:* inline keyboard callbacks."""
     query = update.callback_query
     if query is None or update.effective_user is None:
@@ -242,81 +315,17 @@ async def timezone_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     data = query.data or ""
     user_id = update.effective_user.id
 
-    # Back to top-level region list.
     if data == _CB_REGIONS:
-        try:
-            await query.edit_message_text(
-                "Select your timezone region:",
-                reply_markup=_regions_keyboard(),
-            )
-        except Exception:
-            pass
+        await _tz_regions(query, user_id, _context)
         return
 
-    # Drill into a region.
     if data.startswith(_CB_REGION_PREFIX):
-        region_key = data[len(_CB_REGION_PREFIX) :]
-        keyboard = _region_keyboard(region_key)
-        if keyboard is None:
-            await query.edit_message_text(
-                "Unknown region. Please try again.", reply_markup=_regions_keyboard()
-            )
-            return
-        region_label = _REGIONS[region_key][0]
-        try:
-            await query.edit_message_text(
-                f"{region_label} — select your timezone:",
-                reply_markup=keyboard,
-            )
-        except Exception:
-            pass
+        await _tz_region(query, user_id, _context)
         return
 
-    # Set a specific timezone.
     if data.startswith(_CB_SET_PREFIX):
-        iana_name = data[len(_CB_SET_PREFIX) :]
-        if not is_valid_timezone(iana_name):
-            try:
-                await query.edit_message_text(
-                    _unknown_timezone_message(iana_name, include_guided_hint=False)
-                    + "\n\nPlease select again.",
-                    reply_markup=_regions_keyboard(),
-                )
-            except Exception:
-                pass
-            return
-
-        await db.set_user_timezone(user_id, iana_name)
-        logger.info("User %s set timezone to %r (via inline)", user_id, iana_name)
-        try:
-            await query.edit_message_text(
-                f"Timezone set to {iana_name}.\n"
-                f"All date and time displays will use this timezone.\n"
-                f"You can change it anytime with /timezone."
-            )
-        except Exception:
-            pass
+        await _tz_set(query, user_id, _context)
         return
 
-    # Manual entry instructions.
     if data == _CB_MANUAL:
-        try:
-            await query.edit_message_text(
-                "To set a custom timezone, send:\n"
-                "/settimezone <IANA name>\n\n"
-                "Examples:\n"
-                "  /settimezone Europe/Amsterdam\n"
-                "  /settimezone Asia/Kolkata\n"
-                "  /settimezone America/New_York\n\n"
-                "Full list: https://en.wikipedia.org/wiki/List_of_tz_database_time_zones",
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton("< Back", callback_data=_CB_REGIONS),
-                        ]
-                    ]
-                ),
-            )
-        except Exception:
-            pass
-        return
+        await _tz_manual(query, user_id, _context)

@@ -3,6 +3,8 @@ from __future__ import annotations
 import aiosqlite
 import pytest
 
+from database import init_database
+
 
 @pytest.mark.asyncio
 async def test_init_database_migrates_legacy_users_table_without_data_loss(
@@ -25,12 +27,11 @@ async def test_init_database_migrates_legacy_users_table_without_data_loss(
             """
         )
         await conn.execute(
-            "INSERT INTO users (id, username, first_name, last_name, is_admin) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO users (id, username, first_name, last_name, is_admin) "
+            "VALUES (?, ?, ?, ?, ?)",
             (123, "u", "f", "l", 0),
         )
         await conn.commit()
-
-    from database import init_database
 
     await init_database()
 
@@ -54,8 +55,6 @@ async def test_init_database_creates_media_fingerprints_and_duplicate_columns(
     db_env,
 ) -> None:
     """Ensure the media_fingerprints table and duplicate detection columns exist after init."""
-    from database import init_database
-
     await init_database()
 
     async with aiosqlite.connect(db_env) as conn:
@@ -130,8 +129,6 @@ async def test_init_database_migrates_legacy_schedules_to_next_planned_run_at(
         )
         await conn.commit()
 
-    from database import init_database
-
     await init_database()
 
     async with aiosqlite.connect(db_env) as conn:
@@ -196,8 +193,6 @@ async def test_migration_adds_duplicate_columns_to_existing_schema(db_env) -> No
             "INSERT INTO channels (user_id, channel_id, channel_name) VALUES (1, '-100', 'ch')"
         )
         await conn.commit()
-
-    from database import init_database
 
     await init_database()
 

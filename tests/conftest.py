@@ -25,9 +25,9 @@ def db_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest_asyncio.fixture
-async def initialized_db(db_env: Path) -> Path:
+async def _initialized_db(db_env: Path) -> Path:
     """Initialize schema in a fresh temp database."""
-    from database import init_database
+    from database import init_database  # noqa: PLC0415 — src/ added in pytest_configure
 
     await init_database()
     return db_env

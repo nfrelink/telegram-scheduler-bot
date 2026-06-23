@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -21,7 +21,7 @@ from telegram.ext import (
 )
 
 from database import queries as db
-from handlers.common import ensure_user_record, parse_int
+from handlers.common import ensure_user_record, parse_int, safe_edit_message_text
 from scheduler.timing import (
     WEEKDAY_NAME_TO_INT,
     parse_time_string,
@@ -232,17 +232,191 @@ async def schedules_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     return SM_SHOWING
 
 
-async def _refresh_list(user_id: int, context: ContextTypes.DEFAULT_TYPE, query=None) -> None:
+async def _refresh_list(
+    user_id: int, _context: ContextTypes.DEFAULT_TYPE, query: CallbackQuery | None = None
+) -> None:
     """Edit the stored list message to show the current schedule state."""
     text, keyboard = await _schedules_list_text_and_keyboard(user_id)
     if query is not None:
-        try:
-            if keyboard:
-                await query.edit_message_text(text, reply_markup=keyboard)
-            else:
-                await query.edit_message_text(text)
-        except Exception:
-            pass
+        if keyboard:
+            await safe_edit_message_text(query, text, reply_markup=keyboard)
+        else:
+            await safe_edit_message_text(query, text)
+
+
+def _sm_parse_id(data: str, prefix: str) -> int | None:
+    if not data.startswith(prefix):
+        return None
+    try:
+        return int(data[len(prefix) :])
+    except ValueError:
+        return None
+
+
+async def _sm_noop(
+    _query: CallbackQuery, _user_id: int, _context: ContextTypes.DEFAULT_TYPE
+) -> int:
+    return SM_SHOWING
+
+
+async def _sm_back(query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
+    await _refresh_list(user_id, context, query)
+    return SM_SHOWING
+
+
+async def _sm_pause(query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
+    s_id = _sm_parse_id(query.data or "", "sm:pause:")
+    if s_id is None:
+        return SM_SHOWING
+    schedule = await db.get_schedule_for_user(user_id, s_id)
+    if schedule is None:
+        await query.answer("Schedule not found.", show_alert=True)
+        return SM_SHOWING
+    await scheduling.pause(s_id, user_id=user_id)
+    await _refresh_list(user_id, context, query)
+    return SM_SHOWING
+
+
+async def _sm_resume(query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
+    s_id = _sm_parse_id(query.data or "", "sm:resume:")
+    if s_id is None:
+        return SM_SHOWING
+    schedule = await db.get_schedule_for_user(user_id, s_id)
+    if schedule is None:
+        await query.answer("Schedule not found.", show_alert=True)
+        return SM_SHOWING
+    count = await db.get_queue_count(s_id)
+    if count == 0:
+        await query.answer(
+            "Queue is empty — add posts with /bulk before resuming.",
+            show_alert=True,
+        )
+        return SM_SHOWING
+    await scheduling.resume(s_id, user_id=user_id)
+    await _refresh_list(user_id, context, query)
+    return SM_SHOWING
+
+
+async def _sm_rm(query: CallbackQuery, user_id: int, _context: ContextTypes.DEFAULT_TYPE) -> int:
+    s_id = _sm_parse_id(query.data or "", "sm:rm:")
+    if s_id is None:
+        return SM_SHOWING
+    schedule = await db.get_schedule_for_user(user_id, s_id)
+    if schedule is None:
+        await query.answer("Schedule not found.", show_alert=True)
+        return SM_SHOWING
+    n_posts = await db.get_queue_count(s_id)
+    name = str(schedule.get("name") or f"Schedule {s_id}")
+    lines = [f"Delete '{name}'?"]
+    if n_posts:
+        lines.append(f"This will also delete {n_posts} queued post(s).")
+    await safe_edit_message_text(
+        query,
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton("Yes, delete", callback_data=f"sm:rmok:{s_id}"),
+                    InlineKeyboardButton("Cancel", callback_data="sm:back"),
+                ]
+            ]
+        ),
+    )
+    return SM_SHOWING
+
+
+async def _sm_rmok(query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
+    s_id = _sm_parse_id(query.data or "", "sm:rmok:")
+    if s_id is None:
+        return SM_SHOWING
+    schedule = await db.get_schedule_for_user(user_id, s_id)
+    if schedule is None:
+        await query.answer("Schedule not found.", show_alert=True)
+        return SM_SHOWING
+    await scheduling.delete(s_id, user_id=user_id)
+    logger.info("User %s deleted schedule %s", user_id, s_id)
+    await _refresh_list(user_id, context, query)
+    return SM_SHOWING
+
+
+async def _sm_settp(query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
+    s_id = _sm_parse_id(query.data or "", "sm:settp:")
+    if s_id is None:
+        return SM_SHOWING
+    schedule = await db.get_schedule_for_user(user_id, s_id)
+    if schedule is None:
+        await query.answer("Schedule not found.", show_alert=True)
+        return SM_SHOWING
+    context.user_data["sm_settp_schedule_id"] = s_id
+    await safe_edit_message_text(
+        query,
+        f"Enter the timezone for '{schedule['name']}' (e.g. Europe/Amsterdam, UTC).\n\n"
+        "/cancel to abort.",
+    )
+    return SM_WAIT_TZ_INPUT
+
+
+async def _sm_new(query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_ctx = await db.get_user_context(user_id)
+    sel_ch_id = user_ctx.get("selected_channel_id")
+    if sel_ch_id is None:
+        await query.answer("Select a channel first with /select.", show_alert=True)
+        return SM_SHOWING
+    channel = await db.get_channel_by_id_for_user(user_id, int(sel_ch_id))
+    if channel is None:
+        await query.answer("Selected channel not found.", show_alert=True)
+        return SM_SHOWING
+    _clear_ns_state(context)
+    context.user_data["ns_channel_db_id"] = int(channel["id"])
+    context.user_data["ns_channel_name"] = str(channel["channel_name"])
+    context.user_data["ns_timezone"] = await _effective_user_timezone_name(user_id)
+    tz_name = context.user_data["ns_timezone"]
+    await safe_edit_message_text(
+        query,
+        f"New schedule for '{channel['channel_name']}'.\n"
+        f"Timezone: {tz_name}\n\n"
+        "Enter a schedule name (or /cancel).",
+    )
+    return NS_WAIT_NAME
+
+
+async def _sm_edit(query: CallbackQuery, user_id: int, context: ContextTypes.DEFAULT_TYPE) -> int:
+    s_id = _sm_parse_id(query.data or "", "sm:edit:")
+    if s_id is None:
+        return SM_SHOWING
+    schedule = await db.get_schedule_for_user(user_id, s_id)
+    if schedule is None:
+        await query.answer("Schedule not found.", show_alert=True)
+        return SM_SHOWING
+    _clear_es_state(context)
+    context.user_data["es_schedule_id"] = s_id
+    context.user_data["es_current_name"] = schedule.get("name")
+    context.user_data["es_current_pattern"] = schedule.get("pattern")
+    context.user_data["es_timezone"] = str(schedule.get("timezone") or default_timezone_name())
+    tz_name = context.user_data["es_timezone"]
+    await safe_edit_message_text(
+        query,
+        f"Editing '{schedule['name']}' (timezone: {tz_name}).\n\n"
+        "What do you want to edit? Reply with: name or pattern\n\n"
+        "/cancel to stop.",
+    )
+    return ES_WAIT_FIELD
+
+
+_SM_EXACT_HANDLERS: dict[str, object] = {
+    "sm:noop": _sm_noop,
+    "sm:back": _sm_back,
+    "sm:new": _sm_new,
+}
+
+_SM_PREFIX_HANDLERS: tuple[tuple[str, object], ...] = (
+    ("sm:pause:", _sm_pause),
+    ("sm:resume:", _sm_resume),
+    ("sm:rm:", _sm_rm),
+    ("sm:rmok:", _sm_rmok),
+    ("sm:settp:", _sm_settp),
+    ("sm:edit:", _sm_edit),
+)
 
 
 # ---------------------------------------------------------------------------
@@ -260,167 +434,13 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     data = query.data or ""
     user_id = update.effective_user.id
 
-    # --- sm:noop ---
-    if data == "sm:noop":
-        return SM_SHOWING
+    exact = _SM_EXACT_HANDLERS.get(data)
+    if exact is not None:
+        return await exact(query, user_id, context)  # type: ignore[operator]
 
-    # --- sm:back — refresh list ---
-    if data == "sm:back":
-        await _refresh_list(user_id, context, query)
-        return SM_SHOWING
-
-    # --- sm:pause:{id} ---
-    if data.startswith("sm:pause:"):
-        try:
-            s_id = int(data[9:])
-        except ValueError:
-            return SM_SHOWING
-        schedule = await db.get_schedule_for_user(user_id, s_id)
-        if schedule is None:
-            await query.answer("Schedule not found.", show_alert=True)
-            return SM_SHOWING
-        await scheduling.pause(s_id, user_id=user_id)
-        await _refresh_list(user_id, context, query)
-        return SM_SHOWING
-
-    # --- sm:resume:{id} ---
-    if data.startswith("sm:resume:"):
-        try:
-            s_id = int(data[10:])
-        except ValueError:
-            return SM_SHOWING
-        schedule = await db.get_schedule_for_user(user_id, s_id)
-        if schedule is None:
-            await query.answer("Schedule not found.", show_alert=True)
-            return SM_SHOWING
-        count = await db.get_queue_count(s_id)
-        if count == 0:
-            await query.answer(
-                "Queue is empty — add posts with /bulk before resuming.",
-                show_alert=True,
-            )
-            return SM_SHOWING
-        await scheduling.resume(s_id, user_id=user_id)
-        await _refresh_list(user_id, context, query)
-        return SM_SHOWING
-
-    # --- sm:rm:{id} — show delete confirmation ---
-    if data.startswith("sm:rm:"):
-        try:
-            s_id = int(data[6:])
-        except ValueError:
-            return SM_SHOWING
-        schedule = await db.get_schedule_for_user(user_id, s_id)
-        if schedule is None:
-            await query.answer("Schedule not found.", show_alert=True)
-            return SM_SHOWING
-        n_posts = await db.get_queue_count(s_id)
-        name = str(schedule.get("name") or f"Schedule {s_id}")
-        lines = [f"Delete '{name}'?"]
-        if n_posts:
-            lines.append(f"This will also delete {n_posts} queued post(s).")
-        try:
-            await query.edit_message_text(
-                "\n".join(lines),
-                reply_markup=InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton("Yes, delete", callback_data=f"sm:rmok:{s_id}"),
-                            InlineKeyboardButton("Cancel", callback_data="sm:back"),
-                        ]
-                    ]
-                ),
-            )
-        except Exception:
-            pass
-        return SM_SHOWING
-
-    # --- sm:rmok:{id} — perform deletion ---
-    if data.startswith("sm:rmok:"):
-        try:
-            s_id = int(data[8:])
-        except ValueError:
-            return SM_SHOWING
-        schedule = await db.get_schedule_for_user(user_id, s_id)
-        if schedule is None:
-            await query.answer("Schedule not found.", show_alert=True)
-            return SM_SHOWING
-        await scheduling.delete(s_id, user_id=user_id)
-        logger.info("User %s deleted schedule %s", user_id, s_id)
-        await _refresh_list(user_id, context, query)
-        return SM_SHOWING
-
-    # --- sm:settp:{id} — ask for timezone ---
-    if data.startswith("sm:settp:"):
-        try:
-            s_id = int(data[9:])
-        except ValueError:
-            return SM_SHOWING
-        schedule = await db.get_schedule_for_user(user_id, s_id)
-        if schedule is None:
-            await query.answer("Schedule not found.", show_alert=True)
-            return SM_SHOWING
-        context.user_data["sm_settp_schedule_id"] = s_id
-        try:
-            await query.edit_message_text(
-                f"Enter the timezone for '{schedule['name']}' (e.g. Europe/Amsterdam, UTC).\n\n"
-                "/cancel to abort."
-            )
-        except Exception:
-            pass
-        return SM_WAIT_TZ_INPUT
-
-    # --- sm:new — start new schedule wizard ---
-    if data == "sm:new":
-        user_ctx = await db.get_user_context(user_id)
-        sel_ch_id = user_ctx.get("selected_channel_id")
-        if sel_ch_id is None:
-            await query.answer("Select a channel first with /select.", show_alert=True)
-            return SM_SHOWING
-        channel = await db.get_channel_by_id_for_user(user_id, int(sel_ch_id))
-        if channel is None:
-            await query.answer("Selected channel not found.", show_alert=True)
-            return SM_SHOWING
-        _clear_ns_state(context)
-        context.user_data["ns_channel_db_id"] = int(channel["id"])
-        context.user_data["ns_channel_name"] = str(channel["channel_name"])
-        context.user_data["ns_timezone"] = await _effective_user_timezone_name(user_id)
-        tz_name = context.user_data["ns_timezone"]
-        try:
-            await query.edit_message_text(
-                f"New schedule for '{channel['channel_name']}'.\n"
-                f"Timezone: {tz_name}\n\n"
-                "Enter a schedule name (or /cancel)."
-            )
-        except Exception:
-            pass
-        return NS_WAIT_NAME
-
-    # --- sm:edit:{id} — start edit schedule wizard ---
-    if data.startswith("sm:edit:"):
-        try:
-            s_id = int(data[8:])
-        except ValueError:
-            return SM_SHOWING
-        schedule = await db.get_schedule_for_user(user_id, s_id)
-        if schedule is None:
-            await query.answer("Schedule not found.", show_alert=True)
-            return SM_SHOWING
-        _clear_es_state(context)
-        context.user_data["es_schedule_id"] = s_id
-        context.user_data["es_current_name"] = schedule.get("name")
-        context.user_data["es_current_pattern"] = schedule.get("pattern")
-        context.user_data["es_timezone"] = str(schedule.get("timezone") or default_timezone_name())
-        tz_name = context.user_data["es_timezone"]
-        try:
-            await query.edit_message_text(
-                f"Editing '{schedule['name']}' (timezone: {tz_name}).\n\n"
-                "What do you want to edit? Reply with: name or pattern\n\n"
-                "/cancel to stop."
-            )
-        except Exception:
-            pass
-        return ES_WAIT_FIELD
+    for prefix, handler in _SM_PREFIX_HANDLERS:
+        if data.startswith(prefix):
+            return await handler(query, user_id, context)  # type: ignore[operator]
 
     return SM_SHOWING
 
@@ -428,6 +448,19 @@ async def schedules_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ---------------------------------------------------------------------------
 # SM_WAIT_TZ_INPUT — set schedule timezone
 # ---------------------------------------------------------------------------
+
+
+async def _schedules_tz_apply(user_id: int, s_id: int, raw: str) -> tuple[int, str | None]:
+    """Apply timezone update. Returns (next_state, error_message)."""
+    schedule = await db.get_schedule_for_user(user_id, s_id)
+    if schedule is None:
+        return ConversationHandler.END, "Schedule not found."
+    try:
+        await scheduling.update_timezone(s_id, timezone_name=raw, user_id=user_id)
+    except InvalidTimezoneError as e:
+        return SM_WAIT_TZ_INPUT, str(e)
+    logger.info("User %s set timezone of schedule %s to %s", user_id, s_id, raw)
+    return ConversationHandler.END, f"Timezone for '{schedule['name']}' set to {raw}."
 
 
 async def schedules_tz_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -455,25 +488,11 @@ async def schedules_tz_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await msg.reply_text("Session expired. Use /schedules to start again.")
         return ConversationHandler.END
 
-    schedule = await db.get_schedule_for_user(update.effective_user.id, int(s_id))
-    if schedule is None:
-        await msg.reply_text("Schedule not found.")
-        return ConversationHandler.END
-
-    try:
-        await scheduling.update_timezone(
-            int(s_id), timezone_name=raw, user_id=update.effective_user.id
-        )
-    except InvalidTimezoneError as e:
-        # Defence-in-depth: handler already validated above, but the service
-        # is the single source of truth for what a valid timezone looks like.
-        # Should the two ever disagree, prefer the service's verdict.
-        await msg.reply_text(str(e))
-        return SM_WAIT_TZ_INPUT
-    logger.info("User %s set timezone of schedule %s to %s", update.effective_user.id, s_id, raw)
-    await msg.reply_text(f"Timezone for '{schedule['name']}' set to {raw}.")
-    context.user_data.pop("sm_settp_schedule_id", None)
-    return ConversationHandler.END
+    next_state, outcome = await _schedules_tz_apply(update.effective_user.id, int(s_id), raw)
+    await msg.reply_text(outcome or "")
+    if next_state == ConversationHandler.END:
+        context.user_data.pop("sm_settp_schedule_id", None)
+    return next_state
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +836,9 @@ async def schedule_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # ---------------------------------------------------------------------------
 
 
+_SETSCHEDULETZ_ARG_COUNT = 2
+
+
 async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Set a schedule's timezone via command args (legacy, power-user)."""
     await ensure_user_record(update, context)
@@ -825,7 +847,7 @@ async def setscheduletimezone_command(update: Update, context: ContextTypes.DEFA
     user_id = update.effective_user.id
     schedule_id: int | None = None
     tz_arg: str | None = None
-    if len(context.args) == 2:
+    if len(context.args) == _SETSCHEDULETZ_ARG_COUNT:
         schedule_id = _parse_schedule_id(context.args[0])
         tz_arg = context.args[1]
     elif len(context.args) == 1:

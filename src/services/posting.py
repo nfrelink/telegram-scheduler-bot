@@ -50,7 +50,7 @@ async def enqueue_bulk(
     inserted, post_ids = await db.add_queued_posts_bulk(schedule_id, posts)
     if fingerprints and channel_db_id is not None:
         file_id_to_post_id: dict[str, int] = {}
-        for post_dict, pid in zip(posts, post_ids):
+        for post_dict, pid in zip(posts, post_ids, strict=False):
             fid = post_dict.get("file_id")
             if fid:
                 file_id_to_post_id[fid] = pid

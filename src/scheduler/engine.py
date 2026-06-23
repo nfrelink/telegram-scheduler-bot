@@ -57,11 +57,9 @@ async def start_scheduler(bot: ExtBot) -> None:  # pragma: no cover
         while True:
             try:
                 await _process_due_schedules(bot, rate_limiter=rate_limiter)
-            except Exception as e:
-                logger.error(
-                    "Error in scheduler tick: %s",
-                    e,
-                    exc_info=True,
+            except Exception:
+                logger.exception(
+                    "Error in scheduler tick",
                     extra={"event": "scheduler_tick_error"},
                 )
 
@@ -122,72 +120,15 @@ async def _catch_up_missed_posts() -> None:
     schedules = await db.get_active_schedules()
 
     total_scheduled = 0
-
     for schedule in schedules:
-        schedule_id = int(schedule["id"])
         try:
-            cursor = _catchup_cursor(schedule, now=now)
-            if cursor is None:
-                # Nothing reasonable to compute from (no NPR, no last_run_at,
-                # no created_at, no valid pattern). Leave it; the tick's
-                # defensive backfill will handle it.
-                continue
-
-            missed = 0
-            # CATCHUP_MAX_ITERATIONS is a hard upper bound that protects against
-            # a pattern that could (pathologically) keep returning timestamps
-            # <= now forever. With the default CATCHUP_MAX_RUNS_PER_SCHEDULE=5
-            # the inner cap break fires first; the loop "ran to completion"
-            # branch is only exercisable by setting MAX < cap, which is not a
-            # supported configuration.
-            for _ in range(CATCHUP_MAX_ITERATIONS):
-                if cursor > now:
-                    break
-                missed += 1
-                if missed >= CATCHUP_MAX_RUNS_PER_SCHEDULE:
-                    cursor = calculate_next_run(schedule, after=cursor)
-                    break
-                cursor = calculate_next_run(schedule, after=cursor)
-
-            # Always normalise next_planned_run_at to the next slot strictly
-            # after `now`. This both backfills NULL on first migration tick
-            # and prevents the regular tick from chewing through past slots.
-            new_next_planned = calculate_next_run(schedule, after=now)
-            await scheduling.persist_next_run(schedule_id, new_next_planned)
-
-            if missed <= 0:
-                continue
-
-            candidates = await db.get_queued_posts_unscheduled(schedule_id, limit=missed)
-            if not candidates:
-                continue
-
-            updates: list[tuple[int, datetime]] = []
-            for i, post in enumerate(candidates[:missed]):
-                post_id = int(post["id"])
-                updates.append((post_id, now + timedelta(seconds=CATCHUP_SPACING_SECONDS * i)))
-
-            await posting.bulk_set_scheduled_for(updates)
-            total_scheduled += len(updates)
-
-            logger.info(
-                "Catch-up scheduled %s posts for schedule id=%s; next_planned_run_at=%s",
-                len(updates),
+            scheduled = await _catch_up_single_schedule(schedule, now=now)
+            total_scheduled += scheduled
+        except Exception:
+            schedule_id = int(schedule["id"])
+            logger.exception(
+                "Catch-up failed for schedule id=%s",
                 schedule_id,
-                new_next_planned.isoformat(),
-                extra={
-                    "event": "catchup_scheduled",
-                    "schedule_id": schedule_id,
-                    "scheduled_count": len(updates),
-                    "next_planned_run_at": new_next_planned.isoformat(),
-                },
-            )
-        except Exception as e:
-            logger.error(
-                "Catch-up failed for schedule id=%s: %s",
-                schedule_id,
-                e,
-                exc_info=True,
                 extra={"event": "catchup_failed", "schedule_id": schedule_id},
             )
 
@@ -199,7 +140,79 @@ async def _catch_up_missed_posts() -> None:
         )
 
 
-def _catchup_cursor(schedule: dict[str, Any], *, now: datetime) -> datetime | None:
+def _count_missed_slots(
+    schedule: dict[str, Any],
+    cursor: datetime,
+    *,
+    now: datetime,
+) -> tuple[int, datetime]:
+    """Count missed fire slots and return the advanced cursor."""
+    missed = 0
+    # CATCHUP_MAX_ITERATIONS is a hard upper bound that protects against
+    # a pattern that could (pathologically) keep returning timestamps
+    # <= now forever. With the default CATCHUP_MAX_RUNS_PER_SCHEDULE=5
+    # the inner cap break fires first; the loop "ran to completion"
+    # branch is only exercisable by setting MAX < cap, which is not a
+    # supported configuration.
+    for _ in range(CATCHUP_MAX_ITERATIONS):
+        if cursor > now:
+            break
+        missed += 1
+        if missed >= CATCHUP_MAX_RUNS_PER_SCHEDULE:
+            cursor = calculate_next_run(schedule, after=cursor)
+            break
+        cursor = calculate_next_run(schedule, after=cursor)
+    return missed, cursor
+
+
+async def _catch_up_single_schedule(schedule: dict[str, Any], *, now: datetime) -> int:
+    """Catch up one schedule; return the number of posts scheduled."""
+    schedule_id = int(schedule["id"])
+    cursor = _catchup_cursor(schedule)
+    if cursor is None:
+        # Nothing reasonable to compute from (no NPR, no last_run_at,
+        # no created_at, no valid pattern). Leave it; the tick's
+        # defensive backfill will handle it.
+        return 0
+
+    missed, _cursor = _count_missed_slots(schedule, cursor, now=now)
+
+    # Always normalise next_planned_run_at to the next slot strictly
+    # after `now`. This both backfills NULL on first migration tick
+    # and prevents the regular tick from chewing through past slots.
+    new_next_planned = calculate_next_run(schedule, after=now)
+    await scheduling.persist_next_run(schedule_id, new_next_planned)
+
+    if missed <= 0:
+        return 0
+
+    candidates = await db.get_queued_posts_unscheduled(schedule_id, limit=missed)
+    if not candidates:
+        return 0
+
+    updates: list[tuple[int, datetime]] = []
+    for i, post in enumerate(candidates[:missed]):
+        post_id = int(post["id"])
+        updates.append((post_id, now + timedelta(seconds=CATCHUP_SPACING_SECONDS * i)))
+
+    await posting.bulk_set_scheduled_for(updates)
+
+    logger.info(
+        "Catch-up scheduled %s posts for schedule id=%s; next_planned_run_at=%s",
+        len(updates),
+        schedule_id,
+        new_next_planned.isoformat(),
+        extra={
+            "event": "catchup_scheduled",
+            "schedule_id": schedule_id,
+            "scheduled_count": len(updates),
+            "next_planned_run_at": new_next_planned.isoformat(),
+        },
+    )
+    return len(updates)
+
+
+def _catchup_cursor(schedule: dict[str, Any]) -> datetime | None:
     """Pick the timestamp to start counting missed slots from.
 
     Prefers next_planned_run_at; falls back to deriving a value from the
@@ -228,12 +241,10 @@ async def _process_due_schedules(bot: ExtBot, *, rate_limiter: RateLimiter) -> N
     for schedule in schedules:
         try:
             await _process_schedule(bot, schedule, now=now, rate_limiter=rate_limiter)
-        except Exception as e:
-            logger.error(
-                "Error processing schedule id=%s: %s",
+        except Exception:
+            logger.exception(
+                "Error processing schedule id=%s",
                 schedule.get("id"),
-                e,
-                exc_info=True,
                 extra={
                     "event": "schedule_tick_error",
                     "schedule_id": schedule.get("id"),
@@ -553,11 +564,9 @@ async def _handle_post_failure(
 async def _notify_user(bot: ExtBot, user_id: int, message: str, entities) -> None:  # type: ignore[no-untyped-def]
     try:
         await bot.send_message(chat_id=user_id, text=message, entities=entities)
-    except Exception as e:
-        logger.error(
-            "Failed to notify user %s: %s",
+    except Exception:
+        logger.exception(
+            "Failed to notify user %s",
             user_id,
-            e,
-            exc_info=True,
             extra={"event": "user_notify_failed", "user_id": user_id},
         )

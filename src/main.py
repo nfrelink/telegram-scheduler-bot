@@ -7,7 +7,6 @@ import asyncio
 import logging
 import os
 import signal
-import sys
 import warnings
 from contextlib import suppress
 from typing import Final
@@ -86,7 +85,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
-    except Exception as e:
+    except Exception:
         # Basic last-resort logging; logging may not be configured yet.
-        print(f"Fatal error: {e}", file=sys.stderr)
         raise

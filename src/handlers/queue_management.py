@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from datetime import date as _date
@@ -12,11 +13,13 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from telegram import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaDocument,
     InputMediaPhoto,
     InputMediaVideo,
+    Message,
     Update,
 )
 from telegram.ext import (
@@ -30,12 +33,24 @@ from telegram.ext import (
 
 from database import queries as db
 from database.time import parse_timestamp
-from handlers.common import ensure_user_record, parse_int
+from handlers.common import (
+    ensure_user_record,
+    parse_int,
+    safe_edit_message_caption,
+    safe_edit_message_media,
+    safe_edit_message_text,
+)
 from scheduler.timing import calculate_next_run
 from services import posting
 from utils.tg_text import Segment, render
 
 logger = logging.getLogger(__name__)
+
+_CAPTION_PREVIEW_LEN = 60
+_TELEGRAM_MEDIA_GROUP_MAX = 10
+_MAX_HOUR = 23
+_MAX_MINUTE = 59
+_MAX_COMPLETION_ESTIMATE = 1000
 
 
 def _format_dt(dt: datetime, *, tz_name: str | None = None) -> str:
@@ -48,14 +63,19 @@ def _format_dt(dt: datetime, *, tz_name: str | None = None) -> str:
     return dt.astimezone(tz).replace(microsecond=0).isoformat()
 
 
-def _media_group_is_forwarded(media_group_data: object) -> bool:
-    if not isinstance(media_group_data, str) or not media_group_data.strip():
-        return False
+def _load_json_list(raw: object) -> list | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
     try:
-        items = json.loads(media_group_data)
+        items = json.loads(raw)
     except Exception:
-        return False
-    if not isinstance(items, list) or not items:
+        return None
+    return items if isinstance(items, list) else None
+
+
+def _media_group_is_forwarded(media_group_data: object) -> bool:
+    items = _load_json_list(media_group_data)
+    if not items:
         return False
     first = items[0]
     if not isinstance(first, dict):
@@ -67,12 +87,12 @@ def _media_group_is_forwarded(media_group_data: object) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Queue browser — callback data tokens
+# Queue browser - callback data tokens
 # Format: qv:go:{schedule_id}:{offset}
 #         qv:da:{post_id}:{schedule_id}:{offset}   (delete ask)
 #         qv:do:{post_id}:{schedule_id}:{offset}   (delete confirmed)
 #         qv:al:{post_id}                           (show full album)
-#         qv:pd:{post_id}                           (set pinned date — ConversationHandler entry)
+#         qv:pd:{post_id}                           (set pinned date - ConversationHandler entry)
 #         qv:cp:{post_id}:{schedule_id}:{offset}   (clear pinned date)
 #         qv:noop                                    (non-interactive position button)
 # ---------------------------------------------------------------------------
@@ -81,7 +101,7 @@ _CB_DEL_ASK = "qv:da"
 _CB_DEL_OK = "qv:do"
 _CB_ALBUM = "qv:al"
 _CB_PIN_DATE = "qv:pd"  # entry point for pin-date conversation
-_CB_CLEAR_PIN = "qv:cp"  # clear pinned_at — format: qv:cp:{post_id}:{schedule_id}:{offset}
+_CB_CLEAR_PIN = "qv:cp"  # clear pinned_at - format: qv:cp:{post_id}:{schedule_id}:{offset}
 _CB_NOOP = "qv:noop"
 
 
@@ -97,18 +117,16 @@ class _QueuePage:
 
 def _first_media_from_group(post: dict[str, Any]) -> tuple[str, str] | None:
     """Return (file_id, media_type) for the first displayable item in a media group."""
-    media_group_data = post.get("media_group_data")
-    if not media_group_data:
+    items = _load_json_list(post.get("media_group_data"))
+    if not items:
         return None
-    try:
-        items = json.loads(media_group_data)
-        if items and isinstance(items[0], dict):
-            fid = items[0].get("file_id")
-            mt = items[0].get("media_type")
-            if fid and mt in ("photo", "video", "document"):
-                return str(fid), str(mt)
-    except Exception:
-        pass
+    first = items[0]
+    if not isinstance(first, dict):
+        return None
+    fid = first.get("file_id")
+    mt = first.get("media_type")
+    if fid and mt in ("photo", "video", "document"):
+        return str(fid), str(mt)
     return None
 
 
@@ -116,12 +134,8 @@ def _all_media_from_group(
     post: dict[str, Any],
 ) -> list[InputMediaPhoto | InputMediaVideo | InputMediaDocument]:
     """Return InputMedia objects for every item in a media_group post that has a file_id."""
-    media_group_data = post.get("media_group_data")
-    if not media_group_data:
-        return []
-    try:
-        items = json.loads(media_group_data)
-    except Exception:
+    items = _load_json_list(post.get("media_group_data"))
+    if not items:
         return []
     result: list[InputMediaPhoto | InputMediaVideo | InputMediaDocument] = []
     for item in items:
@@ -181,14 +195,9 @@ def _get_display_caption(post: dict[str, Any]) -> str | None:
     caption = (post.get("caption") or "").strip()
     if caption:
         return caption
-    media_group_data = post.get("media_group_data")
-    if media_group_data:
-        try:
-            items = json.loads(media_group_data)
-            if items and isinstance(items[0], dict):
-                return (items[0].get("caption") or "").strip() or None
-        except Exception:
-            pass
+    items = _load_json_list(post.get("media_group_data"))
+    if items and isinstance(items[0], dict):
+        return (items[0].get("caption") or "").strip() or None
     return None
 
 
@@ -216,9 +225,10 @@ def _estimate_send_time(schedule: dict[str, Any], offset: int) -> datetime | Non
     try:
         for _ in range(offset + 1):
             cursor = calculate_next_run(schedule, after=cursor)
-        return cursor
     except Exception:
         return None
+    else:
+        return cursor
 
 
 def _estimate_completion(schedule: dict[str, Any], count: int) -> datetime | None:
@@ -227,11 +237,12 @@ def _estimate_completion(schedule: dict[str, Any], count: int) -> datetime | Non
         return None
     cursor = datetime.now(UTC)
     try:
-        for _ in range(min(count, 1000)):
+        for _ in range(min(count, _MAX_COMPLETION_ESTIMATE)):
             cursor = calculate_next_run(schedule, after=cursor)
-        return cursor
     except Exception:
         return None
+    else:
+        return cursor
 
 
 def _queue_nav_keyboard(
@@ -313,6 +324,99 @@ def _queue_confirm_keyboard(
     )
 
 
+def _empty_queue_page(schedule: dict[str, Any], schedule_id: int) -> _QueuePage:
+    schedule_name = str(schedule.get("name") or f"Schedule {schedule_id}")
+    segments = [
+        Segment(f"Queue: {schedule_name}\nQueue is empty."),
+    ]
+    text, entities = render(segments)
+    return _QueuePage(
+        text=text,
+        entities=entities or None,
+        keyboard=InlineKeyboardMarkup([]),
+        is_empty=True,
+    )
+
+
+def _resolve_post_display_media(post: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Return (file_id, media_type) for the post preview, if any."""
+    media_type = str(post.get("media_type") or "unknown")
+    if media_type in ("photo", "video", "document"):
+        raw_fid = post.get("file_id")
+        if raw_fid:
+            return str(raw_fid), media_type
+    elif media_type == "media_group":
+        group_result = _first_media_from_group(post)
+        if group_result:
+            return group_result
+    return None, None
+
+
+def _album_count_for_post(post: dict[str, Any], media_type: str) -> int:
+    if media_type != "media_group":
+        return 0
+    items = _load_json_list(post.get("media_group_data") or "[]")
+    return len(items) if items else 0
+
+
+def _queue_page_segments(
+    *,
+    schedule_name: str,
+    state: str,
+    total: int,
+    offset: int,
+    media_type: str,
+    is_forward: bool,
+    caption: str | None,
+    retry_count: int,
+    pinned_at: datetime | None,
+    est_send: datetime | None,
+    completion: datetime | None,
+    tz_name: str,
+    album_count: int,
+) -> list[Segment]:
+    segments: list[Segment] = [
+        Segment(f"Queue: {schedule_name}\nState: {state} | Total: {total} post(s)\n"),
+    ]
+    if completion:
+        segments.append(
+            Segment(
+                f"Est. completion: {_format_dt_browser(completion, tz_name=tz_name)} ({tz_name})\n"
+            )
+        )
+
+    segments.append(Segment(f"\nPost {offset + 1} of {total}\n"))
+
+    if media_type == "media_group":
+        type_label = f"album ({album_count} items)" + (" — native forward" if is_forward else "")
+    else:
+        type_label = media_type + (" — native forward" if is_forward else "")
+    segments.append(Segment(f"Type: {type_label}\n"))
+
+    if not is_forward:
+        if caption:
+            preview = caption[:_CAPTION_PREVIEW_LEN] + (
+                "..." if len(caption) > _CAPTION_PREVIEW_LEN else ""
+            )
+            segments.append(Segment(f'Caption: "{preview}"\n'))
+        else:
+            segments.append(Segment("Caption: none\n"))
+
+    if retry_count:
+        segments.append(Segment(f"Retries: {retry_count}\n"))
+
+    if pinned_at is not None:
+        segments.append(
+            Segment(f"Pinned to: {_format_dt_browser(pinned_at, tz_name=tz_name)} ({tz_name})")
+        )
+    elif est_send:
+        segments.append(
+            Segment(f"Est. send: {_format_dt_browser(est_send, tz_name=tz_name)} ({tz_name})")
+        )
+
+    return segments
+
+
 async def _build_queue_page(
     *,
     user_id: int,
@@ -334,17 +438,7 @@ async def _build_queue_page(
     total = await db.get_queue_count(schedule_id)
 
     if total == 0:
-        schedule_name = str(schedule.get("name") or f"Schedule {schedule_id}")
-        segments = [
-            Segment(f"Queue: {schedule_name}\nQueue is empty."),
-        ]
-        text, entities = render(segments)
-        return _QueuePage(
-            text=text,
-            entities=entities or None,
-            keyboard=InlineKeyboardMarkup([]),
-            is_empty=True,
-        )
+        return _empty_queue_page(schedule, schedule_id)
 
     offset = max(0, min(offset, total - 1))
 
@@ -358,19 +452,7 @@ async def _build_queue_page(
     retry_count = int(post.get("retry_count") or 0)
     is_forward = _is_native_forward(post)
     caption = _get_display_caption(post)
-
-    # Resolve which file to display and what Telegram media type it is.
-    display_file_id: str | None = None
-    display_media_type: str | None = None
-    if media_type in ("photo", "video", "document"):
-        raw_fid = post.get("file_id")
-        if raw_fid:
-            display_file_id = str(raw_fid)
-            display_media_type = media_type
-    elif media_type == "media_group":
-        group_result = _first_media_from_group(post)
-        if group_result:
-            display_file_id, display_media_type = group_result
+    display_file_id, display_media_type = _resolve_post_display_media(post)
 
     pinned_at = parse_timestamp(post.get("pinned_at"))
     scheduled_for = parse_timestamp(post.get("scheduled_for"))
@@ -379,48 +461,23 @@ async def _build_queue_page(
 
     schedule_name = str(schedule.get("name") or f"Schedule {schedule_id}")
     state = str(schedule.get("state") or "unknown")
+    album_count = _album_count_for_post(post, media_type)
 
-    segments: list[Segment] = [
-        Segment(f"Queue: {schedule_name}\nState: {state} | Total: {total} post(s)\n"),
-    ]
-    if completion:
-        segments.append(
-            Segment(
-                f"Est. completion: {_format_dt_browser(completion, tz_name=tz_name)} ({tz_name})\n"
-            )
-        )
-
-    segments.append(Segment(f"\nPost {offset + 1} of {total}\n"))
-
-    album_count = 0
-    if media_type == "media_group":
-        try:
-            album_count = len(json.loads(post.get("media_group_data") or "[]"))
-        except Exception:
-            album_count = 0
-        type_label = f"album ({album_count} items)" + (" — native forward" if is_forward else "")
-    else:
-        type_label = media_type + (" — native forward" if is_forward else "")
-    segments.append(Segment(f"Type: {type_label}\n"))
-
-    if not is_forward:
-        if caption:
-            preview = caption[:60] + ("..." if len(caption) > 60 else "")
-            segments.append(Segment(f'Caption: "{preview}"\n'))
-        else:
-            segments.append(Segment("Caption: none\n"))
-
-    if retry_count:
-        segments.append(Segment(f"Retries: {retry_count}\n"))
-
-    if pinned_at is not None:
-        segments.append(
-            Segment(f"Pinned to: {_format_dt_browser(pinned_at, tz_name=tz_name)} ({tz_name})")
-        )
-    elif est_send:
-        segments.append(
-            Segment(f"Est. send: {_format_dt_browser(est_send, tz_name=tz_name)} ({tz_name})")
-        )
+    segments = _queue_page_segments(
+        schedule_name=schedule_name,
+        state=state,
+        total=total,
+        offset=offset,
+        media_type=media_type,
+        is_forward=is_forward,
+        caption=caption,
+        retry_count=retry_count,
+        pinned_at=pinned_at,
+        est_send=est_send,
+        completion=completion,
+        tz_name=tz_name,
+        album_count=album_count,
+    )
 
     text, entities = render(segments)
     keyboard = _queue_nav_keyboard(
@@ -440,6 +497,202 @@ async def _build_queue_page(
     )
 
 
+def _parse_callback_ints(parts: list[str], indices: tuple[int, ...]) -> tuple[int, ...] | None:
+    try:
+        return tuple(int(parts[i]) for i in indices)
+    except IndexError, ValueError:
+        return None
+
+
+async def _edit_query_with_queue_page(query: CallbackQuery, page: _QueuePage) -> None:
+    if page.file_id and page.file_media_type:
+        input_media = _to_input_media(
+            file_id=page.file_id,
+            media_type=page.file_media_type,
+            caption=page.text,
+            caption_entities=page.entities,
+        )
+        await safe_edit_message_media(query, input_media, reply_markup=page.keyboard)
+    else:
+        await safe_edit_message_text(
+            query, page.text, entities=page.entities, reply_markup=page.keyboard
+        )
+
+
+async def _qv_owned_post(post_id: int, user_id: int) -> dict[str, Any] | None:
+    post = await db.get_queued_post_with_owner(post_id)
+    if post is None or int(post["owner_user_id"]) != user_id:
+        return None
+    return post
+
+
+async def _qv_handle_go(
+    query: CallbackQuery,
+    _context: ContextTypes.DEFAULT_TYPE,
+    parts: list[str],
+    user_id: int,
+) -> None:
+    parsed = _parse_callback_ints(parts, (2, 3))
+    if parsed is None:
+        await query.edit_message_caption("Navigation error.")
+        return
+    schedule_id, offset = parsed
+
+    page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
+    if page is None:
+        await query.edit_message_caption("Schedule not found or not owned by you.")
+        return
+
+    await _edit_query_with_queue_page(query, page)
+
+
+async def _qv_handle_del_ask(
+    query: CallbackQuery,
+    _context: ContextTypes.DEFAULT_TYPE,
+    parts: list[str],
+    user_id: int,
+) -> None:
+    parsed = _parse_callback_ints(parts, (2, 3, 4))
+    if parsed is None:
+        await query.edit_message_caption("Invalid data.")
+        return
+    post_id, schedule_id, offset = parsed
+
+    post = await _qv_owned_post(post_id, user_id)
+    if post is None:
+        await query.edit_message_caption("Post not found or not owned by you.")
+        return
+
+    keyboard = _queue_confirm_keyboard(post_id=post_id, schedule_id=schedule_id, offset=offset)
+    # Keep the media visible so the user can see what they are about to delete.
+    await safe_edit_message_caption(
+        query,
+        f"Delete post {post_id} ({post.get('media_type')})?\nThis cannot be undone.",
+        reply_markup=keyboard,
+    )
+
+
+async def _qv_handle_del_ok(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    parts: list[str],
+    user_id: int,
+) -> None:
+    parsed = _parse_callback_ints(parts, (2, 3, 4))
+    if parsed is None:
+        await query.edit_message_caption("Invalid data.")
+        return
+    post_id, schedule_id, offset = parsed
+
+    post = await _qv_owned_post(post_id, user_id)
+    if post is None:
+        await query.edit_message_caption("Post not found or not owned by you.")
+        return
+
+    await posting.cancel(post_id=post_id, user_id=user_id)
+
+    # Stay at the same offset; _build_queue_page clamps it to the new total.
+    page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
+    if page is None:
+        await query.edit_message_caption("Schedule not found.")
+        return
+
+    if page.is_empty:
+        # Clear the old media message's keyboard, then send a new text message.
+        await safe_edit_message_caption(
+            query, "Post deleted.", reply_markup=InlineKeyboardMarkup([])
+        )
+        msg = query.message
+        if msg is not None:
+            await context.bot.send_message(chat_id=msg.chat_id, text="The queue is now empty.")
+        return
+
+    await _edit_query_with_queue_page(query, page)
+
+
+async def _qv_handle_clear_pin(
+    query: CallbackQuery,
+    _context: ContextTypes.DEFAULT_TYPE,
+    parts: list[str],
+    user_id: int,
+) -> None:
+    parsed = _parse_callback_ints(parts, (2, 3, 4))
+    if parsed is None:
+        await query.edit_message_caption("Invalid data.")
+        return
+    post_id, schedule_id, offset = parsed
+
+    post = await _qv_owned_post(post_id, user_id)
+    if post is None:
+        await query.edit_message_caption("Post not found or not owned by you.")
+        return
+
+    await posting.unpin(post_id, user_id=user_id)
+
+    page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
+    if page is None:
+        await query.edit_message_caption("Schedule not found.")
+        return
+
+    await _edit_query_with_queue_page(query, page)
+
+
+async def _qv_handle_album(
+    query: CallbackQuery,
+    context: ContextTypes.DEFAULT_TYPE,
+    parts: list[str],
+    user_id: int,
+) -> None:
+    parsed = _parse_callback_ints(parts, (2,))
+    if parsed is None:
+        await query.answer("Invalid data.", show_alert=True)
+        return
+    (post_id,) = parsed
+
+    post = await _qv_owned_post(post_id, user_id)
+    if post is None:
+        await query.answer("Post not found or not owned by you.", show_alert=True)
+        return
+
+    media_items = _all_media_from_group(post)
+    if not media_items:
+        await query.answer("No displayable media found in this album.", show_alert=True)
+        return
+
+    msg = query.message
+    if msg is None:
+        return
+
+    # Telegram allows 2-10 items per send_media_group.
+    chunk = media_items[:_TELEGRAM_MEDIA_GROUP_MAX]
+    truncated = len(media_items) > _TELEGRAM_MEDIA_GROUP_MAX
+    try:
+        await context.bot.send_media_group(chat_id=msg.chat_id, media=chunk)
+        if truncated:
+            await context.bot.send_message(
+                chat_id=msg.chat_id,
+                text=f"Album has {len(media_items)} items; showing first 10.",
+            )
+    except Exception:
+        logger.exception("Failed to send album preview for post %s", post_id)
+        await query.answer("Could not send album. Some items may be unavailable.", show_alert=True)
+
+
+_QV_CALLBACK_HANDLERS: dict[
+    str,
+    Callable[
+        [CallbackQuery, ContextTypes.DEFAULT_TYPE, list[str], int],
+        Awaitable[None],
+    ],
+] = {
+    _CB_GO: _qv_handle_go,
+    _CB_DEL_ASK: _qv_handle_del_ask,
+    _CB_DEL_OK: _qv_handle_del_ok,
+    _CB_CLEAR_PIN: _qv_handle_clear_pin,
+    _CB_ALBUM: _qv_handle_album,
+}
+
+
 async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all qv:* inline keyboard callbacks for the queue browser."""
     query = update.callback_query
@@ -454,203 +707,66 @@ async def queue_browser_callback(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     parts = data.split(":")
-
-    if data.startswith(f"{_CB_GO}:"):
-        try:
-            schedule_id = int(parts[2])
-            offset = int(parts[3])
-        except IndexError, ValueError:
-            await query.edit_message_caption("Navigation error.")
+    for prefix, handler in _QV_CALLBACK_HANDLERS.items():
+        if data.startswith(f"{prefix}:"):
+            await handler(query, context, parts, user_id)
             return
-
-        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
-        if page is None:
-            await query.edit_message_caption("Schedule not found or not owned by you.")
-            return
-
-        if page.file_id and page.file_media_type:
-            input_media = _to_input_media(
-                file_id=page.file_id,
-                media_type=page.file_media_type,
-                caption=page.text,
-                caption_entities=page.entities,
-            )
-            try:
-                await query.edit_message_media(input_media, reply_markup=page.keyboard)
-            except Exception:
-                pass
-        else:
-            try:
-                await query.edit_message_text(
-                    page.text, entities=page.entities, reply_markup=page.keyboard
-                )
-            except Exception:
-                pass
-        return
-
-    if data.startswith(f"{_CB_DEL_ASK}:"):
-        try:
-            post_id = int(parts[2])
-            schedule_id = int(parts[3])
-            offset = int(parts[4])
-        except IndexError, ValueError:
-            await query.edit_message_caption("Invalid data.")
-            return
-
-        post = await db.get_queued_post_with_owner(post_id)
-        if post is None or int(post["owner_user_id"]) != user_id:
-            await query.edit_message_caption("Post not found or not owned by you.")
-            return
-
-        keyboard = _queue_confirm_keyboard(post_id=post_id, schedule_id=schedule_id, offset=offset)
-        try:
-            # Keep the media visible so the user can see what they are about to delete.
-            await query.edit_message_caption(
-                f"Delete post {post_id} ({post.get('media_type')})?\nThis cannot be undone.",
-                reply_markup=keyboard,
-            )
-        except Exception:
-            pass
-        return
-
-    if data.startswith(f"{_CB_DEL_OK}:"):
-        try:
-            post_id = int(parts[2])
-            schedule_id = int(parts[3])
-            offset = int(parts[4])
-        except IndexError, ValueError:
-            await query.edit_message_caption("Invalid data.")
-            return
-
-        post = await db.get_queued_post_with_owner(post_id)
-        if post is None or int(post["owner_user_id"]) != user_id:
-            await query.edit_message_caption("Post not found or not owned by you.")
-            return
-
-        await posting.cancel(post_id=post_id, user_id=user_id)
-
-        # Stay at the same offset; _build_queue_page clamps it to the new total.
-        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
-        if page is None:
-            await query.edit_message_caption("Schedule not found.")
-            return
-
-        if page.is_empty:
-            # Clear the old media message's keyboard, then send a new text message.
-            try:
-                await query.edit_message_caption(
-                    "Post deleted.", reply_markup=InlineKeyboardMarkup([])
-                )
-            except Exception:
-                pass
-            msg = query.message
-            if msg is not None:
-                await context.bot.send_message(chat_id=msg.chat_id, text="The queue is now empty.")
-        elif page.file_id and page.file_media_type:
-            input_media = _to_input_media(
-                file_id=page.file_id,
-                media_type=page.file_media_type,
-                caption=page.text,
-                caption_entities=page.entities,
-            )
-            try:
-                await query.edit_message_media(input_media, reply_markup=page.keyboard)
-            except Exception:
-                pass
-        else:
-            try:
-                await query.edit_message_text(
-                    page.text, entities=page.entities, reply_markup=page.keyboard
-                )
-            except Exception:
-                pass
-        return
-
-    if data.startswith(f"{_CB_CLEAR_PIN}:"):
-        try:
-            post_id = int(parts[2])
-            schedule_id = int(parts[3])
-            offset = int(parts[4])
-        except IndexError, ValueError:
-            await query.edit_message_caption("Invalid data.")
-            return
-
-        post = await db.get_queued_post_with_owner(post_id)
-        if post is None or int(post["owner_user_id"]) != user_id:
-            await query.edit_message_caption("Post not found or not owned by you.")
-            return
-
-        await posting.unpin(post_id, user_id=user_id)
-
-        page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=offset)
-        if page is None:
-            await query.edit_message_caption("Schedule not found.")
-            return
-
-        if page.file_id and page.file_media_type:
-            input_media = _to_input_media(
-                file_id=page.file_id,
-                media_type=page.file_media_type,
-                caption=page.text,
-                caption_entities=page.entities,
-            )
-            try:
-                await query.edit_message_media(input_media, reply_markup=page.keyboard)
-            except Exception:
-                pass
-        else:
-            try:
-                await query.edit_message_text(
-                    page.text, entities=page.entities, reply_markup=page.keyboard
-                )
-            except Exception:
-                pass
-        return
-
-    if data.startswith(f"{_CB_ALBUM}:"):
-        try:
-            post_id = int(parts[2])
-        except IndexError, ValueError:
-            await query.answer("Invalid data.", show_alert=True)
-            return
-
-        post = await db.get_queued_post_with_owner(post_id)
-        if post is None or int(post["owner_user_id"]) != user_id:
-            await query.answer("Post not found or not owned by you.", show_alert=True)
-            return
-
-        media_items = _all_media_from_group(post)
-        if not media_items:
-            await query.answer("No displayable media found in this album.", show_alert=True)
-            return
-
-        msg = query.message
-        if msg is None:
-            return
-
-        # Telegram allows 2–10 items per send_media_group.
-        chunk = media_items[:10]
-        truncated = len(media_items) > 10
-        try:
-            await context.bot.send_media_group(chat_id=msg.chat_id, media=chunk)
-            if truncated:
-                await context.bot.send_message(
-                    chat_id=msg.chat_id,
-                    text=f"Album has {len(media_items)} items; showing first 10.",
-                )
-        except Exception as exc:
-            logger.error(
-                "Failed to send album preview for post %s: %s",
-                post_id,
-                exc,
-                exc_info=True,
-            )
-            await query.answer(
-                "Could not send album. Some items may be unavailable.", show_alert=True
-            )
-        return
 
     logger.warning("Unhandled queue browser callback data: %r", data)
+
+
+async def _resolve_view_queue_schedule_id(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> tuple[int | None, bool, str | None]:
+    """Return (schedule_id, used_selected, error_message)."""
+    if update.effective_user is None:
+        return None, False, None
+
+    if context.args:
+        schedule_id = parse_int(context.args[0])
+        if schedule_id is None:
+            return None, False, "Invalid schedule id."
+        return schedule_id, False, None
+
+    user_ctx = await db.get_user_context(update.effective_user.id)
+    raw = user_ctx.get("selected_schedule_id")
+    schedule_id = int(raw) if raw is not None else None
+    if schedule_id is None:
+        return (
+            None,
+            True,
+            "Usage: /viewqueue [schedule_id]\nTip: use /select to pick a default schedule.",
+        )
+    return schedule_id, True, None
+
+
+async def _reply_queue_page(message: Message, page: _QueuePage) -> None:
+    if page.file_id and page.file_media_type:
+        match page.file_media_type:
+            case "photo":
+                await message.reply_photo(
+                    page.file_id,
+                    caption=page.text,
+                    caption_entities=page.entities,
+                    reply_markup=page.keyboard,
+                )
+            case "video":
+                await message.reply_video(
+                    page.file_id,
+                    caption=page.text,
+                    caption_entities=page.entities,
+                    reply_markup=page.keyboard,
+                )
+            case _:
+                await message.reply_document(
+                    page.file_id,
+                    caption=page.text,
+                    caption_entities=page.entities,
+                    reply_markup=page.keyboard,
+                )
+    else:
+        await message.reply_text(page.text, entities=page.entities, reply_markup=page.keyboard)
 
 
 async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -659,23 +775,12 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if update.message is None or update.effective_user is None:
         return
 
-    schedule_id: int | None = None
-    used_selected = False
-    if context.args:
-        schedule_id = parse_int(context.args[0])
-        if schedule_id is None:
-            await update.message.reply_text("Invalid schedule id.")
-            return
-    else:
-        user_ctx = await db.get_user_context(update.effective_user.id)
-        raw = user_ctx.get("selected_schedule_id")
-        schedule_id = int(raw) if raw is not None else None
-        used_selected = True
-
-    if schedule_id is None:
-        await update.message.reply_text(
-            "Usage: /viewqueue [schedule_id]\nTip: use /select to pick a default schedule."
-        )
+    schedule_id, used_selected, error_message = await _resolve_view_queue_schedule_id(
+        update, context
+    )
+    if error_message is not None or schedule_id is None:
+        if error_message is not None:
+            await update.message.reply_text(error_message)
         return
 
     schedule = await db.get_schedule_for_user(update.effective_user.id, schedule_id)
@@ -699,33 +804,7 @@ async def view_queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("Schedule not found or not owned by you.")
         return
 
-    if page.file_id and page.file_media_type:
-        match page.file_media_type:
-            case "photo":
-                await update.message.reply_photo(
-                    page.file_id,
-                    caption=page.text,
-                    caption_entities=page.entities,
-                    reply_markup=page.keyboard,
-                )
-            case "video":
-                await update.message.reply_video(
-                    page.file_id,
-                    caption=page.text,
-                    caption_entities=page.entities,
-                    reply_markup=page.keyboard,
-                )
-            case _:
-                await update.message.reply_document(
-                    page.file_id,
-                    caption=page.text,
-                    caption_entities=page.entities,
-                    reply_markup=page.keyboard,
-                )
-    else:
-        await update.message.reply_text(
-            page.text, entities=page.entities, reply_markup=page.keyboard
-        )
+    await _reply_queue_page(update.message, page)
 
 
 async def delete_post_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -755,22 +834,12 @@ async def delete_post_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     await update.message.reply_text(text, entities=entities)
 
 
-async def send_queue_browser(
+async def _send_queue_page_to_chat(
     *,
-    user_id: int,
-    schedule_id: int,
     chat_id: int,
     bot: Any,
+    page: _QueuePage,
 ) -> None:
-    """Send a fresh queue browser message for a schedule to the given chat.
-
-    Used by the menu system to open the queue browser without editing the menu message.
-    """
-    page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=0)
-    if page is None:
-        await bot.send_message(chat_id=chat_id, text="Schedule not found or not owned by you.")
-        return
-
     if page.file_id and page.file_media_type:
         match page.file_media_type:
             case "photo":
@@ -806,12 +875,77 @@ async def send_queue_browser(
         )
 
 
+async def send_queue_browser(
+    *,
+    user_id: int,
+    schedule_id: int,
+    chat_id: int,
+    bot: Any,
+) -> None:
+    """Send a fresh queue browser message for a schedule to the given chat.
+
+    Used by the menu system to open the queue browser without editing the menu message.
+    """
+    page = await _build_queue_page(user_id=user_id, schedule_id=schedule_id, offset=0)
+    if page is None:
+        await bot.send_message(chat_id=chat_id, text="Schedule not found or not owned by you.")
+        return
+
+    await _send_queue_page_to_chat(chat_id=chat_id, bot=bot, page=page)
+
+
 # ---------------------------------------------------------------------------
 # Pin-date conversation
 # ---------------------------------------------------------------------------
 
 _PIN_WAITING_DATE = 0
 _PIN_WAITING_TIME = 1
+
+
+def _parse_iso_date(text: str) -> _date | None:
+    """Parse DD/MM/YYYY."""
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", text)
+    if not m:
+        return None
+    try:
+        return _date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except ValueError:
+        return None
+
+
+def _parse_slash_date(text: str, *, now: _date) -> _date | None:
+    """Parse DD/MM, choosing the nearest future occurrence."""
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})", text)
+    if not m:
+        return None
+    day, month = int(m.group(1)), int(m.group(2))
+    for year in (now.year, now.year + 1):
+        try:
+            d = _date(year, month, day)
+            if d >= now:
+                return d
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_relative_date(text: str, *, now: _date) -> _date | None:
+    """Parse DD Mon YYYY or DD Mon (nearest future occurrence when year omitted)."""
+    for fmt in ("%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(text, fmt).replace(tzinfo=UTC).date()
+        except ValueError:
+            pass
+    for fmt in ("%d %b", "%d %B"):
+        try:
+            partial = datetime.strptime(text + " 2000", fmt + " %Y").replace(tzinfo=UTC).date()
+        except ValueError:
+            continue
+        for year in (now.year, now.year + 1):
+            d = partial.replace(year=year)
+            if d >= now:
+                return d
+    return None
 
 
 def _parse_date_input(text: str, *, now: _date) -> _date | None:
@@ -821,45 +955,19 @@ def _parse_date_input(text: str, *, now: _date) -> _date | None:
     When year is omitted, the nearest future occurrence is chosen.
     """
     text = text.strip()
-
-    # DD/MM/YYYY
-    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", text)
-    if m:
-        try:
-            return _date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
-        except ValueError:
-            return None
-
-    # DD/MM — infer year
-    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})", text)
-    if m:
-        day, month = int(m.group(1)), int(m.group(2))
-        for year in (now.year, now.year + 1):
-            try:
-                d = _date(year, month, day)
-                if d >= now:
-                    return d
-            except ValueError:
-                continue
-        return None
-
-    # DD Mon YYYY or DD Mon
-    for fmt in ("%d %b %Y", "%d %B %Y"):
-        try:
-            return datetime.strptime(text, fmt).date()
-        except ValueError:
-            pass
-    for fmt in ("%d %b", "%d %B"):
-        try:
-            partial = datetime.strptime(text + " 2000", fmt + " %Y").date()
-        except ValueError:
-            continue
-        for year in (now.year, now.year + 1):
-            d = partial.replace(year=year)
-            if d >= now:
-                return d
-
+    for parser in (
+        _parse_iso_date,
+        lambda value: _parse_slash_date(value, now=now),
+        lambda value: _parse_relative_date(value, now=now),
+    ):
+        result = parser(text)
+        if result is not None:
+            return result
     return None
+
+
+def _valid_time_parts(hour: int, minute: int) -> bool:
+    return 0 <= hour <= _MAX_HOUR and 0 <= minute <= _MAX_MINUTE
 
 
 def _parse_time_input(text: str) -> tuple[int, int] | None:
@@ -868,12 +976,12 @@ def _parse_time_input(text: str) -> tuple[int, int] | None:
     m = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
-        if 0 <= h <= 23 and 0 <= mi <= 59:
+        if _valid_time_parts(h, mi):
             return h, mi
     m = re.fullmatch(r"(\d{2})(\d{2})", text)
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
-        if 0 <= h <= 23 and 0 <= mi <= 59:
+        if _valid_time_parts(h, mi):
             return h, mi
     return None
 
@@ -979,10 +1087,9 @@ async def pin_date_got_time(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     utc_dt = local_dt.astimezone(UTC)
 
     if utc_dt <= datetime.now(UTC):
+        past_label = f"{pending_date.strftime('%d %b %Y')} {hour:02d}:{minute:02d} ({user_tz_name})"
         await update.message.reply_text(
-            f"{pending_date.strftime('%d %b %Y')} {hour:02d}:{minute:02d} ({user_tz_name}) is in the past.\n"
-            "Enter the date again:\n"
-            "/cancel to abort."
+            f"{past_label} is in the past.\nEnter the date again:\n/cancel to abort."
         )
         context.user_data.pop("pin_date", None)
         return _PIN_WAITING_DATE
@@ -992,8 +1099,11 @@ async def pin_date_got_time(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data.pop("pin_date", None)
     context.user_data.pop("pin_user_tz", None)
 
+    pinned_label = (
+        f"{pending_date.strftime('%d %b %Y')} at {hour:02d}:{minute:02d} ({user_tz_name})"
+    )
     await update.message.reply_text(
-        f"Post pinned to {pending_date.strftime('%d %b %Y')} at {hour:02d}:{minute:02d} ({user_tz_name}).\n"
+        f"Post pinned to {pinned_label}.\n"
         "It will be sent at or shortly after that time, ahead of the regular queue.\n"
         "Tap 'Clear date' in the queue browser to unpin."
     )

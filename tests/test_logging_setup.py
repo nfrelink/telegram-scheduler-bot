@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -119,12 +120,14 @@ def test_extra_nested_dict_recurses() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _raise_value_error() -> None:
+    raise ValueError("bad input")
+
+
 def test_exc_info_produces_structured_error_block() -> None:
     try:
-        raise ValueError("bad input")
+        _raise_value_error()
     except ValueError:
-        import sys
-
         record = _make_record(level=logging.ERROR, exc_info=sys.exc_info())
     payload = _format(record)
     assert payload["error"]["type"] == "ValueError"
@@ -168,14 +171,16 @@ def test_bare_token_in_extra_is_redacted_via_final_pass() -> None:
     assert "<redacted>" in payload_text
 
 
+def _raise_runtime_error_with_token() -> None:
+    raise RuntimeError(
+        "request failed: https://api.telegram.org/bot1234567890:AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPP/sendMessage"
+    )
+
+
 def test_token_redacted_in_traceback() -> None:
     try:
-        raise RuntimeError(
-            "request failed: https://api.telegram.org/bot1234567890:AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPP/sendMessage"
-        )
+        _raise_runtime_error_with_token()
     except RuntimeError:
-        import sys
-
         record = _make_record(level=logging.ERROR, exc_info=sys.exc_info())
     payload = _format(record)
     assert "AABBCCDD" not in payload["error"]["message"]
